@@ -1,0 +1,18 @@
+# Generated editing artifacts
+output/
+work/
+*.mp4
+*.mov
+*.m4v
+*.wav
+
+# Python caches and local environments
+__pycache__/
+*.pyc
+.venv/
+venv/
+transcribe-venv/
+
+# OS/editor files
+.DS_Store
+Thumbs.db

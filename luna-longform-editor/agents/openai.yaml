@@ -1,0 +1,4 @@
+interface:
+  display_name: "Luna Longform Editor"
+  short_description: "Edit Luna videos into tight rough cuts"
+  default_prompt: "Use $luna-longform-editor to turn this raw Luna video into a tight rough cut and review package."

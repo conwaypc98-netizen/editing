@@ -1,0 +1,21 @@
+Luna Longform Editor Windows Portable Package
+
+Included:
+- luna-longform-editor/SKILL.md
+- luna-longform-editor/agents/openai.yaml
+- luna-longform-editor/assets/luna_intro_background.png
+- luna-longform-editor/references/professional-editing-rules.md
+- luna-longform-editor/references/style-notes.md
+- luna-longform-editor/scripts/*.py
+- luna-longform-editor/scripts/*.sh
+- luna-longform-editor/scripts/*.ps1
+- Install-Windows.ps1
+- README_WINDOWS.md
+- PROMPT_FOR_CODEX_ON_WINDOWS.md
+
+Not included:
+- Raw source videos
+- Rendered draft videos
+- Transcript/output folders
+- Python virtual environments
+- FFmpeg binaries
