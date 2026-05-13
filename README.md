@@ -2,7 +2,7 @@
 
 Portable Codex skill for intelligently editing Luna Tweak long-form videos on Windows.
 
-This is not a simple silence remover. The skill tells Codex to watch/transcribe the video, choose the best fluent takes, remove stutters and bad duplicates, keep the timeline logical, tighten spoken pacing, snap cuts to audio boundaries, apply the Luna intro slate when appropriate, audit the rendered transcript, and clean generated artifacts when done.
+This is not a simple silence remover. The skill tells Codex to watch/transcribe the video, choose the best fluent takes, remove stutters and bad duplicates, keep the timeline logical, tighten spoken pacing, snap cuts to audio boundaries, apply the Luna intro slate when appropriate, add smart tutorial focus zooms, audit the rendered transcript, and clean generated artifacts when done.
 
 ## Windows Install
 
@@ -33,6 +33,8 @@ After install, use:
 ```text
 Use the luna-longform-editor skill on "C:\path\to\video.mov" and clean up everything except the final MP4 when done.
 ```
+
+The skill should add modest focus zooms after the intro when a Windows setting, utility, button, control panel, benchmark, or result needs to be easier to see. It should keep the zooms sparse, centered, and smooth.
 
 If you have not installed it yet, use:
 

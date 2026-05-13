@@ -45,13 +45,19 @@ The core question before every cut is: **does this make the video smoother, clea
    - Use `scripts/apply_intro_slate.py` with the default asset `assets/luna_intro_background.png`, unless the user provides a different image.
    - The script extracts the edited intro audio and renders that audio over the still image, then continues with the normal edited video after the intro boundary.
    - Do not use the slate over the tutorial/body section where the viewer needs to see clicks, app state, benchmark progress, or results.
-9. Verify the final duration, decode health, contact sheet, and transcript from the output.
-10. Run a listening-style QA loop:
+9. Add smart focus zooms after the intro when the tutorial UI would be hard to read:
+   - Read `references/focus-zoom-rules.md` before planning zooms.
+   - Use transcript context plus contact sheets/screenshots to decide what the viewer needs to see: tweak utility, Windows Settings panel, Device Manager, NVIDIA Control Panel, browser download button, benchmark/result area, or software control.
+   - Build a sparse zoom plan. Keep zooms modest and stable; do not bounce in and out for every click.
+   - Use `scripts/apply_focus_zoom.py` on the intro-slate/final visual pass. Exclude the intro slate itself unless the user explicitly wants a zoom there.
+   - If the target is unclear, keep the full frame instead of guessing and hiding important context.
+10. Verify the final duration, decode health, contact sheet, and transcript from the output.
+11. Run a listening-style QA loop:
    - Transcribe the rendered edit.
    - Run `scripts/audit_output_pacing.py` on the rendered transcript.
    - Read the rendered transcript for repeated words, duplicate phrases, held short words, and awkward sentence/list gaps.
    - If the output still has obvious stutters or unnatural delays, revise the keep list and rerender instead of handing it over.
-11. After the final MP4 is accepted for delivery, clean generated artifacts:
+12. After the final MP4 is accepted for delivery, clean generated artifacts:
    - Run `scripts/cleanup_edit_artifacts.py --final-output <final.mp4> --delete`.
    - Keep only the delivered final MP4 in the output root unless the user explicitly asks to preserve drafts, contact sheets, keep lists, transcripts, or analysis files.
    - Never delete the user's original source recording.
@@ -67,6 +73,8 @@ The core question before every cut is: **does this make the video smoother, clea
 - Do not cut exactly at rounded second marks if speech is nearby.
 - Do not accept clicks/static/noisy joins; rerender with audio-safe cut settings.
 - Do not leave a delay that makes the speaker sound like separate clips stitched together when the line should feel like one natural sentence.
+- Do not add constant aggressive zoom, rapid zoom pumping, or focus crops that hide the UI element being discussed.
+- Do not zoom during the intro slate unless explicitly requested.
 
 ## Editorial Rules
 
@@ -80,6 +88,7 @@ Prefer clean, high-retention pacing:
 - If a short word is stretched across a long pause in the transcript, treat it as a hidden pause/stutter and tighten around the real vocal sound.
 - Keep proof moments: test start, tweak selection, before/after metrics, final results, and any clear payoff.
 - Remove low-value mouse wandering, menu searching, typing delays, and waiting screens unless needed for comprehension.
+- During tutorial/body sections, lightly zoom toward the UI being showcased when it improves readability. Keep the zoom centered on the actual setting, button, utility, benchmark, or panel being explained.
 
 ## Scripts
 
@@ -99,6 +108,7 @@ Bundled scripts live in `scripts/`:
 - `audit_output_pacing.py`: scan the rendered transcript for long gaps, held short words, adjacent repeats, and repeated short phrases.
 - `render_keep_list.py`: render an intelligent edit from Codex's keep-list decisions.
 - `apply_intro_slate.py`: detect the intro boundary from the rendered transcript, extract the intro audio, and replace the intro visuals with a still image.
+- `apply_focus_zoom.py`: apply a sparse, smooth focus-zoom plan after the intro so tutorial UI is easier to see without nauseating zoom motion.
 - `cleanup_edit_artifacts.py`: after the final output is accepted, delete generated drafts, keep lists, contact sheets, transcript folders, and analysis files while keeping the final MP4.
 
 Quick pause drafts are allowed for exploration, but the final Luna edit should use a transcript/visual review, spoken-pacing tightening, and a snapped keep list. `render_keep_list.py` uses frame/sample-accurate FFmpeg trim filters and tiny audio fades at edit points to avoid clipped words and static clicks.
@@ -106,6 +116,7 @@ Quick pause drafts are allowed for exploration, but the final Luna edit should u
 ## Reference Files
 
 - Read `references/professional-editing-rules.md` before making semantic cuts.
+- Read `references/focus-zoom-rules.md` before adding tutorial focus zooms.
 - Read `references/style-notes.md` when applying saved channel preferences.
 
 ## Reporting
@@ -118,5 +129,6 @@ When done, include:
 - what kind of cuts were made
 - whether spoken-pacing tightening, word-level/audio-boundary snapping, rendered transcript audit, and decode verification were run
 - whether intro slate detection/audio extraction was applied, including the detected intro duration
+- whether smart focus zooms were applied, including the number of zoom regions and the main targets
 - whether generated edit artifacts were cleaned up
 - any known limitations, especially if no transcript was available

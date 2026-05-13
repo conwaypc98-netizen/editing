@@ -24,6 +24,7 @@ Current default assumptions:
 - Future final passes should include a rendered transcript pacing audit and at least one revise/rerender loop when stutters or unnatural gaps remain.
 - Use the saved Luna intro background image for spoken intro sections when requested: `assets/luna_intro_background.png`.
 - The intro image should cover only the spoken hook/setup intro. Cut back to the screen recording when the tutorial/body begins and the viewer needs to see actions.
+- Add smart, modest focus zooms after the intro when a tutorial UI would be easier to understand zoomed in. Center the zoom on the showcased setting, utility, control panel, button, benchmark, or result. Keep zooms sparse and smooth so the viewer is helped, not distracted.
 
 Feedback to capture over time:
 
