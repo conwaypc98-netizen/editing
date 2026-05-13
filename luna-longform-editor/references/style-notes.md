@@ -24,7 +24,7 @@ Current default assumptions:
 - Future final passes should include a rendered transcript pacing audit and at least one revise/rerender loop when stutters or unnatural gaps remain.
 - Use the saved Luna intro background image for spoken intro sections when requested: `assets/luna_intro_background.png`.
 - The intro image should cover only the spoken hook/setup intro. Cut back to the screen recording when the tutorial/body begins and the viewer needs to see actions.
-- Add smart, modest focus zooms after the intro when a tutorial UI would be easier to understand zoomed in. Center the zoom on the showcased setting, utility, control panel, button, benchmark, or result. Keep zooms sparse and smooth so the viewer is helped, not distracted.
+- Add smart, modest focus zooms after the intro when a tutorial UI would be easier to understand zoomed in. Frame the viewer's current action, not just the largest window: if the user is typing in Windows search, clicking a taskbar/menu item, or using a small dialog, keep that UI visible. Prefer box-based zoom plans with `target_box` and `include_boxes` so app windows like Logitech G Hub are actually centered and edge UI such as bottom-left search is not cropped out.
 
 Feedback to capture over time:
 

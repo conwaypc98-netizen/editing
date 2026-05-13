@@ -41,7 +41,7 @@ Use the luna-longform-editor skill to edit "C:\path\to\my raw video.mov".
 Watch/transcribe it, remove stutters, repeated takes, awkward dead air, reference-video watching, and bad duplicate explanations. Keep the timeline logical, tighten spoken pacing, snap cuts to the voice waveform, apply the Luna intro slate when appropriate, audit the rendered transcript, and clean generated artifacts so only the final MP4 remains.
 ```
 
-The skill also adds modest smart focus zooms after the intro when a tutorial UI would be easier to see. Codex should choose the zoom target from the transcript and visual review, then render it with `apply_focus_zoom.py`.
+The skill also adds modest smart focus zooms after the intro when a tutorial UI would be easier to see. Codex should choose the zoom target from the transcript and visual review, frame the full viewer action, keep required context like Windows search/taskbar UI visible, then render it with `apply_focus_zoom.py`.
 
 If the skill is not installed yet, start with:
 

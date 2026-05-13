@@ -34,7 +34,7 @@ After install, use:
 Use the luna-longform-editor skill on "C:\path\to\video.mov" and clean up everything except the final MP4 when done.
 ```
 
-The skill should add modest focus zooms after the intro when a Windows setting, utility, button, control panel, benchmark, or result needs to be easier to see. It should keep the zooms sparse, centered, and smooth.
+The skill should add modest focus zooms after the intro when a Windows setting, utility, button, control panel, benchmark, or result needs to be easier to see. It should frame the whole viewer action, use box-based targets when possible, keep required context like Windows search/taskbar UI visible, and keep zooms sparse, centered, and smooth.
 
 If you have not installed it yet, use:
 

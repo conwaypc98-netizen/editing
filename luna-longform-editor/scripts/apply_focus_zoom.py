@@ -6,6 +6,12 @@ import subprocess
 from pathlib import Path
 
 
+def clamp(value: float, low: float, high: float) -> float:
+    if high < low:
+        return (low + high) / 2.0
+    return min(high, max(low, value))
+
+
 def run(cmd: list[str], capture: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(
         cmd,
@@ -39,6 +45,123 @@ def probe(path: Path) -> tuple[int, int, float]:
     return int(stream["width"]), int(stream["height"]), duration
 
 
+def parse_box(value, label: str) -> tuple[float, float, float, float]:
+    if isinstance(value, dict):
+        if {"left", "top", "right", "bottom"}.issubset(value):
+            left = float(value["left"])
+            top = float(value["top"])
+            right = float(value["right"])
+            bottom = float(value["bottom"])
+        elif {"x", "y", "width", "height"}.issubset(value):
+            left = float(value["x"])
+            top = float(value["y"])
+            right = left + float(value["width"])
+            bottom = top + float(value["height"])
+        else:
+            raise SystemExit(
+                f"{label} must contain left/top/right/bottom or x/y/width/height."
+            )
+    elif isinstance(value, list) and len(value) == 4:
+        left, top, right, bottom = [float(part) for part in value]
+    else:
+        raise SystemExit(
+            f"{label} must be [left, top, right, bottom] or an object box."
+        )
+
+    left = clamp(left, 0.0, 1.0)
+    top = clamp(top, 0.0, 1.0)
+    right = clamp(right, 0.0, 1.0)
+    bottom = clamp(bottom, 0.0, 1.0)
+    if right <= left or bottom <= top:
+        raise SystemExit(f"{label} has an empty or inverted box.")
+    return left, top, right, bottom
+
+
+def collect_boxes(item: dict, index: int) -> tuple[list[tuple[float, float, float, float]], tuple[float, float, float, float] | None]:
+    boxes: list[tuple[float, float, float, float]] = []
+    primary: tuple[float, float, float, float] | None = None
+
+    if "target_box" in item:
+        primary = parse_box(item["target_box"], f"Zoom {index} target_box")
+        boxes.append(primary)
+
+    for key in ("target_boxes", "include_boxes", "required_boxes"):
+        raw_boxes = item.get(key, [])
+        if not raw_boxes:
+            continue
+        if not isinstance(raw_boxes, list):
+            raise SystemExit(f"Zoom {index} {key} must be a list of boxes.")
+        for box_index, raw_box in enumerate(raw_boxes, start=1):
+            parsed = parse_box(raw_box, f"Zoom {index} {key}[{box_index}]")
+            if primary is None and key == "target_boxes":
+                primary = parsed
+            boxes.append(parsed)
+
+    return boxes, primary
+
+
+def union_boxes(
+    boxes: list[tuple[float, float, float, float]], padding: float
+) -> tuple[float, float, float, float]:
+    left = min(box[0] for box in boxes)
+    top = min(box[1] for box in boxes)
+    right = max(box[2] for box in boxes)
+    bottom = max(box[3] for box in boxes)
+    return (
+        clamp(left - padding, 0.0, 1.0),
+        clamp(top - padding, 0.0, 1.0),
+        clamp(right + padding, 0.0, 1.0),
+        clamp(bottom + padding, 0.0, 1.0),
+    )
+
+
+def fit_center_to_boxes(
+    item: dict,
+    index: int,
+    requested_zoom: float,
+    max_zoom: float,
+) -> tuple[float, float, float, str]:
+    boxes, primary = collect_boxes(item, index)
+    zoom = min(max_zoom, max(1.0, requested_zoom))
+    note = ""
+
+    if boxes:
+        padding = clamp(float(item.get("padding", 0.035)), 0.0, 0.25)
+        left, top, right, bottom = union_boxes(boxes, padding)
+        union_width = max(0.001, right - left)
+        union_height = max(0.001, bottom - top)
+        fit_zoom = min(max_zoom, 1.0 / union_width, 1.0 / union_height)
+        if zoom > fit_zoom:
+            zoom = fit_zoom
+            note = f"fit-required-boxes from {requested_zoom:.2f}"
+
+        crop = 1.0 / zoom
+        if "center_x" in item and "center_y" in item:
+            preferred_x = clamp(float(item["center_x"]), 0.0, 1.0)
+            preferred_y = clamp(float(item["center_y"]), 0.0, 1.0)
+        elif primary:
+            preferred_x = (primary[0] + primary[2]) / 2.0
+            preferred_y = (primary[1] + primary[3]) / 2.0
+        else:
+            preferred_x = (left + right) / 2.0
+            preferred_y = (top + bottom) / 2.0
+
+        min_x = max(crop / 2.0, right - crop / 2.0)
+        max_x = min(1.0 - crop / 2.0, left + crop / 2.0)
+        min_y = max(crop / 2.0, bottom - crop / 2.0)
+        max_y = min(1.0 - crop / 2.0, top + crop / 2.0)
+        center_x = clamp(preferred_x, min_x, max_x)
+        center_y = clamp(preferred_y, min_y, max_y)
+        return center_x, center_y, zoom, note
+
+    center_x = clamp(float(item["center_x"]), 0.0, 1.0)
+    center_y = clamp(float(item["center_y"]), 0.0, 1.0)
+    crop = 1.0 / zoom
+    center_x = clamp(center_x, crop / 2.0, 1.0 - crop / 2.0)
+    center_y = clamp(center_y, crop / 2.0, 1.0 - crop / 2.0)
+    return center_x, center_y, zoom, note
+
+
 def load_plan(path: Path, duration: float, max_zoom: float) -> list[dict]:
     data = json.loads(path.read_text(encoding="utf-8"))
     zooms = data.get("zooms", data if isinstance(data, list) else [])
@@ -58,9 +181,10 @@ def load_plan(path: Path, duration: float, max_zoom: float) -> list[dict]:
             continue
         end = min(end, duration)
 
-        center_x = min(1.0, max(0.0, float(item["center_x"])))
-        center_y = min(1.0, max(0.0, float(item["center_y"])))
-        zoom = min(max_zoom, max(1.0, float(item.get("zoom", 1.12))))
+        requested_zoom = min(max_zoom, max(1.0, float(item.get("zoom", 1.12))))
+        center_x, center_y, zoom, framing_note = fit_center_to_boxes(
+            item, index, requested_zoom, max_zoom
+        )
         if zoom <= 1.001:
             last_end = end
             continue
@@ -72,6 +196,8 @@ def load_plan(path: Path, duration: float, max_zoom: float) -> list[dict]:
                 "center_x": center_x,
                 "center_y": center_y,
                 "zoom": zoom,
+                "requested_zoom": requested_zoom,
+                "framing_note": framing_note,
                 "transition": float(item.get("transition", 0.45)),
                 "label": str(item.get("label", f"zoom-{index}")),
             }
@@ -206,9 +332,14 @@ def main() -> int:
 
     print(f"Applied {len(zooms)} focus zoom region(s): {output}")
     for zoom in zooms:
+        zoom_text = f"zoom={zoom['zoom']:.2f}"
+        if abs(zoom["zoom"] - zoom["requested_zoom"]) > 0.005:
+            zoom_text += f" requested={zoom['requested_zoom']:.2f}"
+        if zoom["framing_note"]:
+            zoom_text += f" {zoom['framing_note']}"
         print(
             f"- {zoom['start']:.2f}-{zoom['end']:.2f}s "
-            f"zoom={zoom['zoom']:.2f} center=({zoom['center_x']:.2f},{zoom['center_y']:.2f}) "
+            f"{zoom_text} center=({zoom['center_x']:.2f},{zoom['center_y']:.2f}) "
             f"{zoom['label']}"
         )
     return 0

@@ -48,8 +48,11 @@ The core question before every cut is: **does this make the video smoother, clea
 9. Add smart focus zooms after the intro when the tutorial UI would be hard to read:
    - Read `references/focus-zoom-rules.md` before planning zooms.
    - Use transcript context plus contact sheets/screenshots to decide what the viewer needs to see: tweak utility, Windows Settings panel, Device Manager, NVIDIA Control Panel, browser download button, benchmark/result area, or software control.
+   - Frame the whole viewer action, not just the biggest window. If the user is typing in Windows search, opening the Start/taskbar search, clicking a bottom-corner menu, or using a small installer prompt, that UI must stay visible even if the main app is elsewhere.
+   - Prefer `target_box` and `include_boxes` in the zoom plan so `scripts/apply_focus_zoom.py` can keep required UI inside the crop and reduce zoom automatically when needed.
    - Build a sparse zoom plan. Keep zooms modest and stable; do not bounce in and out for every click.
    - Use `scripts/apply_focus_zoom.py` on the intro-slate/final visual pass. Exclude the intro slate itself unless the user explicitly wants a zoom there.
+   - After rendering, sample frames from every zoom region and check that the showcased app/control is centered enough, no needed taskbar/search/menu context is cropped out, and the viewer can understand the action without guessing.
    - If the target is unclear, keep the full frame instead of guessing and hiding important context.
 10. Verify the final duration, decode health, contact sheet, and transcript from the output.
 11. Run a listening-style QA loop:
@@ -74,6 +77,7 @@ The core question before every cut is: **does this make the video smoother, clea
 - Do not accept clicks/static/noisy joins; rerender with audio-safe cut settings.
 - Do not leave a delay that makes the speaker sound like separate clips stitched together when the line should feel like one natural sentence.
 - Do not add constant aggressive zoom, rapid zoom pumping, or focus crops that hide the UI element being discussed.
+- Do not crop out required context such as the Windows search box, taskbar corner, app title area, confirmation dialog, or the specific control the viewer needs to follow.
 - Do not zoom during the intro slate unless explicitly requested.
 
 ## Editorial Rules
@@ -89,6 +93,7 @@ Prefer clean, high-retention pacing:
 - Keep proof moments: test start, tweak selection, before/after metrics, final results, and any clear payoff.
 - Remove low-value mouse wandering, menu searching, typing delays, and waiting screens unless needed for comprehension.
 - During tutorial/body sections, lightly zoom toward the UI being showcased when it improves readability. Keep the zoom centered on the actual setting, button, utility, benchmark, or panel being explained.
+- When the current action happens away from the main app, such as typing in bottom-left search before launching Logitech G Hub or a Windows utility, make the search/taskbar UI the target or include it as required context. A zoom is wrong if it hides the thing the viewer needs to watch.
 
 ## Scripts
 
