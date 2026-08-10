@@ -3,8 +3,6 @@ import argparse
 import json
 from pathlib import Path
 
-from faster_whisper import WhisperModel
-
 
 def fmt_time(seconds: float) -> str:
     millis = int(round(seconds * 1000))
@@ -24,6 +22,14 @@ def main() -> int:
     parser.add_argument("--model", default="small.en")
     parser.add_argument("--language", default="en")
     args = parser.parse_args()
+
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as error:
+        raise SystemExit(
+            "faster-whisper is not installed in this Python environment. "
+            "Run the Luna setup script or use the configured transcription virtual environment."
+        ) from error
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

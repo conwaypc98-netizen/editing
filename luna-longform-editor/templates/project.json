@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "mode": "edit",
+  "title": "",
+  "objective": "Create a Luna Tweak video that is concise, fluent, visually clear, and complete.",
+  "audience": "PC gamers following a Windows optimization tutorial",
+  "source": null,
+  "target_duration_seconds": {
+    "minimum": 180,
+    "maximum": 480
+  },
+  "required_story_roles": [
+    "hook",
+    "setup",
+    "tutorial",
+    "proof",
+    "cta"
+  ],
+  "locked_ranges": [],
+  "editorial": {
+    "remove_reference_watching": true,
+    "remove_worse_duplicate_takes": true,
+    "maximum_unexplained_speech_gap_seconds": 0.55,
+    "maximum_zoom": 1.16,
+    "minimum_zoom_hold_seconds": 3.0
+  },
+  "voice": {
+    "provider": "xai",
+    "voice_id_env": "XAI_VOICE_ID",
+    "owner_consent": "required",
+    "language": "en"
+  },
+  "delivery": {
+    "resolution": "2560x1440",
+    "fps": 60,
+    "video_codec": "h264",
+    "audio_codec": "aac",
+    "keep_only_final_after_acceptance": true
+  }
+}

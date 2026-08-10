@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "channel": "Luna Tweak",
+  "behavioral_confidence": "high",
+  "quantitative_confidence": "untrained",
+  "accepted_tutorial_examples": 0,
+  "voice_and_pacing": {
+    "delivery": "Direct, conversational, fluent, and fast without sounding stitched together.",
+    "intro": "The hook and lists are the tightest part of the video.",
+    "natural_pause_policy": "Keep short thought beats; shorten delays that feel hesitant or awkward.",
+    "duplicate_policy": "Keep the clearest complete take and remove false starts, repeated wording, and worse restarts.",
+    "held_word_policy": "Treat stretched short words as hidden hesitation even when the transcript text is correct."
+  },
+  "story_and_visuals": {
+    "order": ["hook", "setup", "tutorial", "proof", "cta"],
+    "reference_watching": "Remove unless essential to the viewer's understanding.",
+    "intro_visual": "Use the Luna background only while the spoken hook or setup does not require screen evidence.",
+    "focus_zoom": "Use sparse modest zooms on the viewer's current action and retain edge UI and required context.",
+    "proof": "Performance claims must agree with visible evidence or be rewritten."
+  },
+  "delivery_guardrails": {
+    "target_loudness_lufs": -16.0,
+    "true_peak_dbtp_maximum": -1.5,
+    "maximum_unexplained_speech_gap_seconds": 0.55,
+    "preferred_zoom_minimum": 1.08,
+    "preferred_zoom_maximum": 1.16,
+    "minimum_zoom_hold_seconds": 3.0
+  },
+  "learned_measurements": {
+    "duration_seconds_median": null,
+    "scene_changes_per_minute_median": null,
+    "words_per_minute_median": null,
+    "positive_speech_gap_p90_median": null,
+    "intro_end_seconds_median": null,
+    "raw_to_final_duration_ratio_median": null
+  },
+  "learning_policy": "Only add a tutorial to quantitative learning after Colin accepts the final. Three examples allow medium confidence; eight allow high confidence. Keep quality guardrails separate from observed style so a weak technical measurement is not copied as a preference."
+}

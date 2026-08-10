@@ -43,7 +43,7 @@ function Find-Python {
     throw "Python 3.10+ was not found. Install Python from python.org or with: winget install Python.Python.3.11"
 }
 
-Write-Host "Setting up Luna Longform Editor for Windows..."
+Write-Host "Setting up Luna Longform Director for Windows..."
 
 if (-not (Test-Command "ffmpeg") -or -not (Test-Command "ffprobe")) {
     if ($InstallFfmpeg) {

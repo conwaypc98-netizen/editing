@@ -57,6 +57,7 @@ Before rendering, read the keep list in order and ask:
 When the user wants a branded/static intro:
 
 - Detect the intro from the rendered transcript, not from a hard-coded timestamp. The intro usually includes the hook, proof/setup, and call to follow along; the body usually begins at language like "Alright guys..." or "before you run/apply..."
+- Prefer explicit `intro_slate` evidence in the validated edit plan. If neither the plan nor transcript proves the boundary, stop for visual judgment instead of using a silent default.
 - Extract the final edited intro audio, then render that audio over the Luna intro background image.
 - Cut from the intro slate into the real screen recording when the tutorial body begins and the viewer needs to see the app.
 - Keep the intro slate 16:9 and full-frame. Scale/crop the image to match the video resolution.

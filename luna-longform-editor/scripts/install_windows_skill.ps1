@@ -36,4 +36,4 @@ if (-not $SkipSetup) {
     & $setup -InstallFfmpeg:$InstallFfmpeg
 }
 
-Write-Host "Luna Longform Editor skill is ready."
+Write-Host "Luna Longform Director skill is ready."

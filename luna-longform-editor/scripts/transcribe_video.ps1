@@ -45,14 +45,11 @@ if ([string]::IsNullOrWhiteSpace($stem)) {
 $outDir = Join-Path (Join-Path (Get-Location) "output") ($stem + "_transcript")
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $audio = Join-Path $outDir ($stem + "_16k.wav")
-$jsonOut = Join-Path $outDir "transcript.json"
-$txtOut = Join-Path $outDir "transcript.txt"
-
 Write-Host "Extracting mono 16k audio..."
 & ffmpeg -hide_banner -y -i $source -map "0:a:0" -ac 1 -ar 16000 -vn $audio
 
 Write-Host "Transcribing with faster-whisper model $Model..."
-& $venvPython $transcriber --audio $audio --model $Model --json-out $jsonOut --text-out $txtOut
+& $venvPython $transcriber $audio --out-dir $outDir --model $Model
 
-Write-Host "Transcript JSON: $jsonOut"
-Write-Host "Transcript text: $txtOut"
+Write-Host "Transcript JSON: $(Join-Path $outDir 'transcript.json')"
+Write-Host "Transcript text: $(Join-Path $outDir 'transcript.txt')"

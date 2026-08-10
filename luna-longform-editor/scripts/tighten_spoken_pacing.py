@@ -48,12 +48,13 @@ def load_words(path: Path) -> list[dict]:
     return words
 
 
-def parse_keep_list(path: Path) -> list[dict]:
+def parse_keep_document(path: Path) -> tuple[dict, list[dict]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     keep = data.get("keep", data if isinstance(data, list) else [])
     if not isinstance(keep, list) or not keep:
         raise SystemExit(f"No keep segments found: {path}")
-    return keep
+    document = dict(data) if isinstance(data, dict) else {"keep": keep}
+    return document, keep
 
 
 def segment_words(words: list[dict], start: float, end: float, tolerance: float) -> list[dict]:
@@ -166,7 +167,7 @@ def main() -> int:
     parser.add_argument("--word-tolerance", type=float, default=0.035)
     args = parser.parse_args()
 
-    keep = parse_keep_list(Path(args.keep_list))
+    document, keep = parse_keep_document(Path(args.keep_list))
     words = load_words(Path(args.transcript_json))
 
     tightened = []
@@ -186,7 +187,8 @@ def main() -> int:
             tightened.append(piece)
             previous_end = piece_end
 
-    Path(args.output).write_text(json.dumps({"keep": tightened}, indent=2) + "\n", encoding="utf-8")
+    document["keep"] = tightened
+    Path(args.output).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote pacing-tightened keep list with {len(tightened)} segments: {args.output}")
     return 0
 

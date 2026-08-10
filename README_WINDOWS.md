@@ -1,6 +1,6 @@
-# Luna Longform Editor - Windows Portable
+# Luna Longform Director - Windows Portable
 
-This folder contains the full `luna-longform-editor` Codex skill, including the intro background image, focus-zoom rules, editing rules, Python render/audit tools, and Windows PowerShell wrappers.
+This folder contains the full `luna-longform-editor` Codex skill, including the job orchestrator, evidence dossier, reasoned-plan validator, desktop recorder, xAI custom-voice integration, shot assembler, final acceptance auditor, intro/zoom tools, and Windows wrappers.
 
 ## What You Need On Windows
 
@@ -34,14 +34,19 @@ The installer copies the skill to:
 
 ## Use
 
-After install, you can prompt Codex on Windows like this:
+After install, you can prompt Codex to edit a recording like this:
 
 ```text
-Use the luna-longform-editor skill to edit "C:\path\to\my raw video.mov".
-Watch/transcribe it, remove stutters, repeated takes, awkward dead air, reference-video watching, and bad duplicate explanations. Keep the timeline logical, tighten spoken pacing, snap cuts to the voice waveform, apply the Luna intro slate when appropriate, audit the rendered transcript, and clean generated artifacts so only the final MP4 remains.
+Use the luna-longform-editor skill to edit "C:\path\to\my raw video.mov". Create an isolated job, build the evidence dossier, inspect the transcript and frames, write a reasoned edit plan, validate it, tighten and snap the approved ranges, render and revise, complete the visual review and transcript audit, and clean only this job after acceptance.
 ```
 
-The skill also adds modest smart focus zooms after the intro when a tutorial UI would be easier to see. Codex should choose the zoom target from the transcript and visual review, frame the full viewer action, keep required context like Windows search/taskbar UI visible, then render it with `apply_focus_zoom.py`.
+To have Codex record and narrate the tutorial instead of you:
+
+```text
+Use the luna-longform-editor skill in synthetic mode for this topic: <topic>. Write the script and shot plan, record each Windows desktop shot, verify the required UI state, generate narration with my verified xAI custom voice, transcribe and audit every generated line, complete the listening review, assemble it, and do not accept the final until every QA gate passes.
+```
+
+Create your own custom voice once in the xAI console, then set `XAI_API_KEY` and `XAI_VOICE_ID` in the environment visible to Codex. The script requires explicit owner-consent confirmation and does not clone voices from old videos.
 
 If the skill is not installed yet, start with:
 
@@ -67,6 +72,18 @@ Run setup again:
 
 ```powershell
 .\luna-longform-editor\scripts\setup_windows.ps1
+```
+
+Create an edit job:
+
+```powershell
+python .\luna-longform-editor\scripts\luna_editor.py init --mode edit --source "C:\path\to\video.mov"
+```
+
+List the screen recorder help:
+
+```powershell
+python .\luna-longform-editor\scripts\record_desktop.py --help
 ```
 
 ## Important

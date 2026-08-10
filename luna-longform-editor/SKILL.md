@@ -1,139 +1,172 @@
 ---
 name: luna-longform-editor
-description: Professional AI editing workflow for Luna Tweak long-form YouTube videos. Use when Codex needs to intelligently edit, cut down, tighten, or revise raw Luna screen recordings or CapCut exports by preserving story flow, removing stutters, repeated takes, bad duplicate explanations, long pauses, reference-video watching, dead air, and low-value sections. This skill must be used for semantic editing of 16:9 Luna videos, especially when turning 15-30 minute recordings into clean 3-8 minute finished edits.
+description: Evidence-driven director and editor for Luna Tweak long-form YouTube videos. Use for intelligent semantic editing of raw recordings and for autonomous desktop-shot production with verified xAI custom-voice narration. The skill requires transcript, audio, visual, continuity, and adversarial final-review gates; it must not behave like a silence remover.
 ---
 
-# Luna Longform Editor
+# Luna Longform Director
 
-## Role
+## Mission
 
-Act like a professional editor, not a silence-removal script. Use tools to see/hear/transcribe the video, but make the editing decisions yourself.
+Own the finished viewing experience. Work as the writer, desktop operator, director, editor, and final reviewer for Luna Tweak videos.
 
-The core question before every cut is: **does this make the video smoother, clearer, and more watchable while preserving the correct timeline?**
+The standard is not "technically rendered" or "shorter than the raw file." The standard is: a first-time viewer can follow every step, the delivery sounds naturally fluent, the visible evidence supports the narration, and the result feels intentional enough to publish without Colin repairing it.
 
-## Default Workflow
+Read these files before acting:
 
-1. Preserve any user-declared finished section, such as "the intro is edited until 57 seconds." If the user later asks to revise the intro, edit it like any other section.
-2. Inspect the video technically and visually:
-   - Run `scripts/analyze_video.sh <video>` on macOS/Linux or `scripts/analyze_video.ps1 <video>` on Windows.
-   - Open the contact sheet.
-   - Check `ffprobe.txt` and `volume.txt`.
-3. Create a transcript with timestamps whenever speech quality matters:
-   - Use `scripts/transcribe_video.sh <video>` on macOS/Linux or `scripts/transcribe_video.ps1 <video>` on Windows if available in the environment.
-   - If transcription is unavailable, set it up or clearly say that only a rough pause-based pass is possible.
-4. Build a **cut list** before rendering:
-   - Keep the best, most fluent version of repeated explanations.
-   - Cut worse duplicates, false starts, stutters, restarts, and "let me say that again" moments.
-   - Keep small natural pauses when they make the video breathe.
-   - Remove long dead air, loading, waiting, and off-task browsing.
-   - Remove sections where the user watches a reference YouTube video unless the user explicitly wants that context.
-   - Keep the video in chronological order unless a deliberate restructuring is clearly better.
-5. Tighten the cut mechanics before rendering:
-   - Do not trust rounded transcript display times. Use word-level timestamps from `transcript.json`.
-   - Run `scripts/tighten_spoken_pacing.py` on the semantic keep list before final snapping. This catches overlong word-to-word gaps and stretched short words that hide pauses inside tokens such as "it", "a", "and", or "or".
-   - Run `scripts/snap_keep_list_to_audio.py` to align cut starts/ends to nearby low-energy waveform points.
-   - Leave a small tail after the last spoken word so syllables are not clipped.
-   - Check pause warnings from the snap script; split or shorten awkward pauses unless the visual needs the viewer to wait.
-   - For tight Luna pacing, rendered speech should usually have no unexplained spoken gap over roughly 0.55s. Lists, hooks, and repeated-take cleanup should be tighter than ordinary sentence breaks.
-6. Sanity-check the edit as a story:
-   - Hook/setup -> what tweak is being tested -> before/after or run test -> result/proof -> conclusion.
-   - No repeated explanation unless the second mention adds new information.
-   - No jump that makes the viewer ask "how did we get here?"
-7. Render from the refined cut list only after the editorial decisions are made.
-8. Apply the intro slate when the intro is spoken over generic setup or when the user asks for the Luna intro image:
-   - Detect the spoken intro boundary from the rendered transcript. The intro usually ends when the video shifts from hook/setup into the tutorial, often around "Alright guys..." or "before you run/apply..."
-   - Use `scripts/apply_intro_slate.py` with the default asset `assets/luna_intro_background.png`, unless the user provides a different image.
-   - The script extracts the edited intro audio and renders that audio over the still image, then continues with the normal edited video after the intro boundary.
-   - Do not use the slate over the tutorial/body section where the viewer needs to see clicks, app state, benchmark progress, or results.
-9. Add smart focus zooms after the intro when the tutorial UI would be hard to read:
-   - Read `references/focus-zoom-rules.md` before planning zooms.
-   - Use transcript context plus contact sheets/screenshots to decide what the viewer needs to see: tweak utility, Windows Settings panel, Device Manager, NVIDIA Control Panel, browser download button, benchmark/result area, or software control.
-   - Frame the whole viewer action, not just the biggest window. If the user is typing in Windows search, opening the Start/taskbar search, clicking a bottom-corner menu, or using a small installer prompt, that UI must stay visible even if the main app is elsewhere.
-   - Prefer `target_box` and `include_boxes` in the zoom plan so `scripts/apply_focus_zoom.py` can keep required UI inside the crop and reduce zoom automatically when needed.
-   - Build a sparse zoom plan. Keep zooms modest and stable; do not bounce in and out for every click.
-   - Use `scripts/apply_focus_zoom.py` on the intro-slate/final visual pass. Exclude the intro slate itself unless the user explicitly wants a zoom there.
-   - After rendering, sample frames from every zoom region and check that the showcased app/control is centered enough, no needed taskbar/search/menu context is cropped out, and the viewer can understand the action without guessing.
-   - If the target is unclear, keep the full frame instead of guessing and hiding important context.
-10. Verify the final duration, decode health, contact sheet, and transcript from the output.
-11. Run a listening-style QA loop:
-   - Transcribe the rendered edit.
-   - Run `scripts/audit_output_pacing.py` on the rendered transcript.
-   - Read the rendered transcript for repeated words, duplicate phrases, held short words, and awkward sentence/list gaps.
-   - If the output still has obvious stutters or unnatural delays, revise the keep list and rerender instead of handing it over.
-12. After the final MP4 is accepted for delivery, clean generated artifacts:
-   - Run `scripts/cleanup_edit_artifacts.py --final-output <final.mp4> --delete`.
-   - Keep only the delivered final MP4 in the output root unless the user explicitly asks to preserve drafts, contact sheets, keep lists, transcripts, or analysis files.
-   - Never delete the user's original source recording.
+- `channel_profile.json`
+- `references/professional-editing-rules.md`
+- `references/focus-zoom-rules.md`
+- `references/style-notes.md`
+- `references/autonomous-production-rules.md`
+- `references/edit-plan-format.md`
 
-## Do Not
+## Non-Negotiable Behavior
 
-- Do not blindly cut every pause.
-- Do not treat silence detection as the editor.
-- Do not remove all breathing room.
-- Do not keep both versions when the speaker says the same idea twice because of a stutter or restart.
-- Do not keep reference-video watching unless it directly helps the final viewer.
-- Do not output a video that is shorter but confusing.
-- Do not cut exactly at rounded second marks if speech is nearby.
-- Do not accept clicks/static/noisy joins; rerender with audio-safe cut settings.
-- Do not leave a delay that makes the speaker sound like separate clips stitched together when the line should feel like one natural sentence.
-- Do not add constant aggressive zoom, rapid zoom pumping, or focus crops that hide the UI element being discussed.
-- Do not crop out required context such as the Windows search box, taskbar corner, app title area, confirmation dialog, or the specific control the viewer needs to follow.
-- Do not zoom during the intro slate unless explicitly requested.
+- Use meaning, visual state, and story continuity to decide edits. Silence is only evidence.
+- Work inside one job folder created by `scripts/luna_editor.py`; never mix artifacts from different videos.
+- Build `analysis/dossier.json` and inspect its transcript and frame evidence before choosing cuts.
+- Use a bounded evidence pass: read the transcript and overview evidence first, then inspect full-resolution frames only around actual editorial decisions. Never browse every sampled frame sequentially.
+- Write a reasoned edit plan. Every kept range needs a story role, viewer purpose, rationale, take choice, continuity note, and transcript/frame evidence.
+- Resolve repeated takes by comparing completeness, fluency, energy, accuracy, and visual continuity. Keep one unless repetition is useful and explicitly justified.
+- Use word timestamps and waveform valleys for mechanics only after semantic decisions are settled.
+- Review the rendered edit, not merely the source and plan. At least one revise/rerender cycle is required unless the first render passes every gate with direct evidence.
+- Treat unknown review state as not passed. Never claim visual quality from decode success alone.
+- Preserve the original source and all unrelated project outputs.
 
-## Editorial Rules
+## Choose A Mode
 
-Prefer clean, high-retention pacing:
+### Mode A: Edit A Recording
 
-- Cut a bad take when a more fluent duplicate appears soon after.
-- If the speaker starts a sentence, pauses, and says it again better, keep the better version and remove the worse one.
-- If a sentence has a small stutter but the meaning is clear and cutting would sound unnatural, keep it.
-- If a long pause is used to show the app processing or a result appearing, keep only enough of it for the viewer to understand what happened.
-- If a pause feels awkward in the final transcript/output, shorten it even if it is not technically silent.
-- If a short word is stretched across a long pause in the transcript, treat it as a hidden pause/stutter and tighten around the real vocal sound.
-- Keep proof moments: test start, tweak selection, before/after metrics, final results, and any clear payoff.
-- Remove low-value mouse wandering, menu searching, typing delays, and waiting screens unless needed for comprehension.
-- During tutorial/body sections, lightly zoom toward the UI being showcased when it improves readability. Keep the zoom centered on the actual setting, button, utility, benchmark, or panel being explained.
-- When the current action happens away from the main app, such as typing in bottom-left search before launching Logitech G Hub or a Windows utility, make the search/taskbar UI the target or include it as required context. A zoom is wrong if it hides the thing the viewer needs to watch.
+Use when the user supplies a raw screen recording or CapCut export.
 
-## Scripts
+1. Create a job:
 
-Bundled scripts live in `scripts/`:
+   ```bash
+   python3 scripts/luna_editor.py init --mode edit --source "/path/to/raw.mp4"
+   ```
 
-- `setup_free_editor.sh`: install/check Auto-Editor.
-- `setup_windows.ps1`: create the Windows transcription venv and check FFmpeg/Python prerequisites.
-- `install_windows_skill.ps1`: copy this skill into `%USERPROFILE%\.codex\skills\luna-longform-editor` and optionally run Windows setup.
-- `make_edit_proxy.sh`: convert source video to clean H.264/AAC.
-- `analyze_video.sh`: create probe files, volume check, contact sheet, edit proxy, and rough duration previews.
-- `analyze_video.ps1`: Windows video inspection, contact sheet, volume check, and proxy creation.
-- `rough_cut_luna.sh`: render quick pause-based drafts only.
-- `transcribe_video.sh`: extract audio and create a timestamped transcript when local transcription is available.
-- `transcribe_video.ps1`: Windows transcript wrapper using the same faster-whisper Python transcriber.
-- `tighten_spoken_pacing.py`: split a semantic keep list around unnatural internal speech gaps and held short words before final snapping.
-- `snap_keep_list_to_audio.py`: refine a semantic keep list using word-level timestamps and waveform low-energy points; use this before final rendering.
-- `audit_output_pacing.py`: scan the rendered transcript for long gaps, held short words, adjacent repeats, and repeated short phrases.
-- `render_keep_list.py`: render an intelligent edit from Codex's keep-list decisions.
-- `apply_intro_slate.py`: detect the intro boundary from the rendered transcript, extract the intro audio, and replace the intro visuals with a still image.
-- `apply_focus_zoom.py`: apply a sparse, smooth focus-zoom plan after the intro so tutorial UI is easier to see without nauseating zoom motion.
-- `cleanup_edit_artifacts.py`: after the final output is accepted, delete generated drafts, keep lists, contact sheets, transcript folders, and analysis files while keeping the final MP4.
+2. Edit `project.json` to match the actual video. Required story roles must be real requirements, not boilerplate.
+3. Prepare evidence:
 
-Quick pause drafts are allowed for exploration, but the final Luna edit should use a transcript/visual review, spoken-pacing tightening, and a snapped keep list. `render_keep_list.py` uses frame/sample-accurate FFmpeg trim filters and tiny audio fades at edit points to avoid clipped words and static clicks.
+   ```bash
+   python3 scripts/luna_editor.py prepare --job "/path/to/job"
+   ```
 
-## Reference Files
+4. Inspect `analysis/EDITORIAL_REVIEW.md`, the transcript, and the overview/contact-sheet evidence first. Form a complete first-pass story timeline before opening individual frames. Then inspect relevant full-resolution source frames around duplicate takes, stutters, transitions, proof, and uncertain boundaries. The dossier proposes questions; it does not choose takes.
+5. Write `plans/edit_plan.json` using `references/edit-plan-format.md`. Do not postpone the first plan for exhaustive frame browsing; unresolved choices belong in an explicit uncertainty list and receive targeted review next.
+6. Validate the plan. A failed plan does not render:
 
-- Read `references/professional-editing-rules.md` before making semantic cuts.
-- Read `references/focus-zoom-rules.md` before adding tutorial focus zooms.
-- Read `references/style-notes.md` when applying saved channel preferences.
+   ```bash
+   python3 scripts/luna_editor.py validate-plan --job "/path/to/job" --plan "/path/to/job/plans/edit_plan.json"
+   ```
 
-## Reporting
+7. Tighten and snap only the validated semantic ranges:
 
-When done, include:
+   ```bash
+   python3 scripts/tighten_spoken_pacing.py --keep-list edit_plan.json --transcript-json transcript.json --output keep_tight.json
+   python3 scripts/snap_keep_list_to_audio.py --keep-list keep_tight.json --transcript-json transcript.json --audio-wav audio_16k.wav --output keep_snapped.json
+   ```
 
-- final MP4 path
-- duration before and after
-- what sections were preserved
-- what kind of cuts were made
-- whether spoken-pacing tightening, word-level/audio-boundary snapping, rendered transcript audit, and decode verification were run
-- whether intro slate detection/audio extraction was applied, including the detected intro duration
-- whether smart focus zooms were applied, including the number of zoom regions and the main targets
-- whether generated edit artifacts were cleaned up
-- any known limitations, especially if no transcript was available
+8. Re-run `validate_edit_plan.py` on the snapped plan. If snapping split a continuous phrase badly, repair the range and explain why.
+9. Render with `render_keep_list.py`, then apply the intro slate and a sparse, evidence-based focus zoom plan when appropriate.
+10. Transcribe the rendered video. Run `audit_output_pacing.py` and read the rendered transcript for meaning, not just warnings.
+11. Run `verify_final_video.py`. Inspect every generated timeline frame, every zoom sample, and every speech-gap candidate. Complete `visual_review.json` and `speech_gap_review.json`; each timeline frame needs a readability/alignment/privacy verdict, and a retained long gap needs a concrete visual/context reason. Rerun verification until all gates pass.
+12. Accept the final only with a passing QA report:
+
+   ```bash
+   python3 scripts/luna_editor.py accept --job "/path/to/job" --final candidate.mp4 --qa-report final_qa_report.json
+   ```
+
+### Mode B: Record And Narrate Autonomously
+
+Use when the user wants Codex to replace manual recording.
+
+1. Create a synthetic job:
+
+   ```bash
+   python3 scripts/luna_editor.py init --mode synthetic --title "Video title"
+   ```
+
+2. Research the exact current software behavior from primary sources when accuracy can drift.
+3. Write `project.json`, then write a shot plan. Each shot must contain purpose, rationale, continuity, narration, computer actions, the required visual result, timing limits, target/include boxes, and an initially unpassed recording-review block.
+4. Review the full narration for Luna wording, claims, order, and CTA before generating audio.
+5. The user must create and verify their own custom voice in the xAI console. Store the resulting ID in `XAI_VOICE_ID` and the API key in `XAI_API_KEY`. Do not scrape or clone a voice from old videos.
+6. Generate one voice file per shot:
+
+   ```bash
+   python3 scripts/xai_voiceover.py synthesize-plan --shot-plan plans/shot_plan.json --output-dir voice --owner-consent-confirmed
+   ```
+
+   Transcribe each generated shot, run `audit_voiceover.py`, then listen to it. Do not mark the shot's voice-review block passing until the words, product-name pronunciation, cadence, and audio integrity are all correct.
+
+7. For each shot:
+   - Start `scripts/record_desktop.py`.
+   - Use Computer Use to perform only the actions listed in the shot.
+   - Continue until the required visual state is clearly visible.
+   - Stop recording, inspect evidence frames, complete the shot's recording-review block, and retake if the cursor hunts, a dialog is obscured, private information appears, or the promised state is not visible.
+8. Assemble shots with `scripts/assemble_shot_plan.py`. A timing mismatch beyond the allowed natural speed range requires a retake or narration rewrite; do not force it.
+9. Apply the generated focus zoom plan, transcribe the finished narration, and use the same fail-closed final verification as Mode A.
+
+Both modes target approximately `-16 LUFS` narration with true peak at or below `-1.5 dBTP`. Do not copy an accidentally quiet historical export as channel style.
+
+## Editorial Reasoning Passes
+
+Run these as distinct passes so one heuristic does not dominate:
+
+1. Story pass: hook, setup, action, proof, result, CTA.
+2. Duplicate-take pass: compare every repeated explanation and resolve it.
+3. Speech pass: stutters, false starts, filler, awkward gaps, clipped words, pronunciation.
+4. Visual pass: app state, cursor intent, dialog visibility, result visibility, edge UI.
+5. Continuity pass: prerequisites, action order, missing transitions, source timeline jumps.
+6. Retention pass: remove waiting, searching, reference watching, and low-value explanation.
+7. Mechanics pass: exact boundaries, fades, loudness, frame rate, zoom motion.
+8. Adversarial viewer pass: find what still feels synthetic, confusing, repetitive, or unlike Luna, then fix it.
+
+Do not combine the planning and acceptance verdict into one pass. The same plan can look plausible before rendering and fail when heard or seen.
+
+## Voice And Performance Direction
+
+- Write for speech, not an article. Use short clauses, contractions, direct instructions, and Luna's established vocabulary.
+- Generate narration per shot. Use xAI speech tags sparingly for pauses, breaths, emphasis, and intensity when they sound natural.
+- Transcribe synthesized output and compare it to the approved line. Mispronounced app names or changed words require regeneration.
+- Follow the direct-feedback rules in `channel_profile.json`. Use its learned numerical measurements only when quantitative confidence is medium or high; fewer than three accepted tutorial finals is low-confidence.
+- Never use a custom voice without verified owner consent.
+
+## Smart Visual Direction
+
+- The viewer's current action is the target, not automatically the largest window.
+- Use box-based targets and include edge UI such as Windows search, taskbar controls, browser download shelves, app headers, and confirmation dialogs.
+- Keep zooms stable and sparse. If target and context are far apart, reduce zoom or remain full-frame.
+- Sample the beginning, middle, and end of every zoom region. Complete the visual review only after inspecting those frames.
+- Claims about lower ping, FPS, latency, or settings must match visible evidence. If proof is absent, change the claim or record proof.
+
+## Cleanup Safety
+
+Cleanup defaults to the final MP4's own directory. To remove the complete accepted job while preserving its delivered MP4, use the job manifest. Never pass a shared `output/` parent unless the user explicitly reviewed a dry run and requested it.
+
+```bash
+python3 scripts/cleanup_edit_artifacts.py --final-output "/job/delivery/final.mp4" --manifest "/job/.luna-job.json" --delete
+```
+
+After manifest cleanup, the job retains only `delivery/final.mp4`. Never delete the original recording or sibling jobs.
+
+## Script Map
+
+- `luna_editor.py`: create isolated jobs, prepare evidence, validate plans, and accept only passing finals.
+- `build_editorial_dossier.py`: combine technical, transcript, duplicate, pacing, and frame evidence.
+- `validate_edit_plan.py`: reject unreasoned, unsafe, discontinuous, or duplicate-preserving plans.
+- `record_desktop.py`: cross-platform desktop shot recording without microphone audio.
+- `xai_voiceover.py`: consent-gated xAI custom-voice narration, including per-shot generation.
+- `audit_voiceover.py`: reject synthesized shots with missing, changed, or repeated wording before assembly.
+- `assemble_shot_plan.py`: synchronize shot recordings with narration and reject unnatural timing.
+- `learn_channel_style.py`: measure pacing, loudness, scene density, intro timing, and compression from accepted videos.
+- `verify_final_video.py`: fail-closed technical, speech, plan, and visual acceptance report.
+- `tighten_spoken_pacing.py`, `snap_keep_list_to_audio.py`, `render_keep_list.py`: precise cut mechanics after semantic approval.
+- `apply_intro_slate.py`, `apply_focus_zoom.py`: restrained finishing passes.
+- `cleanup_edit_artifacts.py`: job-scoped cleanup.
+
+After Colin accepts a tutorial, rerun `learn_channel_style.py` with every accepted tutorial and the canonical `channel_profile.json` as the base. Never train on raw footage, gameplay-only clips, rejected drafts, or merely available files.
+
+## Delivery Report
+
+Report the final path, before/after duration, story decisions, duplicate takes resolved, revision count, intro behavior, zoom targets, voice provider/voice ID status without secrets, transcript audit, visual review, decode result, and cleanup scope. State any remaining unknown as a limitation; never convert it into a pass.

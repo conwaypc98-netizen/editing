@@ -1,0 +1,76 @@
+# Autonomous Luna Production Rules
+
+This workflow has two production modes. Both modes use the same evidence, review, and acceptance gates.
+
+## Mode A: Edit A Human Recording
+
+The source contains the creator's screen and voice. Build an evidence dossier, choose the best takes semantically, align cuts to words and waveform valleys, render, and review the rendered result.
+
+## Mode B: Record And Narrate Autonomously
+
+The agent writes a project brief and a shot plan before touching the desktop. Each shot must specify:
+
+- The sentence the viewer will hear.
+- The exact desktop action to demonstrate.
+- The visual state that proves the action succeeded.
+- Any UI regions that must stay visible.
+- A maximum acceptable duration and whether timing may be adjusted.
+- A recording-review verdict with evidence times, visible-state confirmation, privacy confirmation, and deliberate-cursor confirmation.
+
+Record shots separately. A failed or confusing shot is retaken; it is not hidden by narration. Generate cloned-voice narration per shot, then assemble only when the shot duration and narration duration are compatible.
+
+## Director Contract
+
+The agent is responsible for the finished viewing experience, not merely valid files. Before a plan may render, every kept segment or synthetic shot needs:
+
+- A story role: hook, setup, tutorial, proof, transition, or CTA.
+- A concrete viewer purpose.
+- Transcript or frame evidence.
+- A continuity explanation for any non-obvious jump.
+- A take-choice explanation when duplicate wording exists.
+
+The validator must reject plans that lack these fields. "It looked okay" is not evidence.
+
+## Evidence Passes
+
+1. Technical pass: streams, duration, resolution, frame rate, loudness, decode health.
+2. Language pass: word timestamps, stutters, false starts, duplicate takes, claims, instructions, proof, CTA.
+3. Visual pass: sampled frames around every spoken block and every candidate cut; identify the active app, action, dialog, result, and edge UI.
+4. Continuity pass: confirm that every instruction has the required preceding state and visible result.
+5. Cut-mechanics pass: snap boundaries to low-energy points, retain complete phonemes, and prevent clicks.
+6. Viewer pass: review the rendered transcript and representative frames as if seeing the video for the first time.
+7. Adversarial pass: try to find one reason the video feels synthetic, confusing, repetitive, clipped, visually lost, or unlike Luna. Fix it and rerun acceptance.
+
+## Voice Clone Rules
+
+- Only use a voice that the owner created or verified through xAI's consent flow.
+- Never create a clone from scraped or pre-existing recordings of another person.
+- Store only the `voice_id`; API keys remain in environment variables.
+- Generate narration per shot so pacing can be directed with xAI speech tags and visual timing can be verified.
+- Listen or transcribe the synthesized narration before assembly. Reject mispronounced product names, unnatural emphasis, missing words, and cadence that does not match the channel profile.
+- Require both a passing transcript-comparison report and an explicit per-shot listening review before assembly.
+
+## Desktop Recording Rules
+
+- Start from a clean desktop state with notifications and unrelated personal windows hidden.
+- Record at the final frame rate and aspect ratio when practical.
+- Never type passwords, recovery codes, payment data, or private messages on camera.
+- The cursor must move deliberately. Remove hunting, repeated clicks, accidental menus, and waiting.
+- Keep a shot running until the required visual state is visibly achieved.
+- Restore changed settings when the shot is only a demonstration and the project brief requires restoration.
+
+## Acceptance Gates
+
+A final video is not accepted unless:
+
+- It fully decodes and contains expected video and audio streams.
+- Integrated narration loudness is publish-ready and true peak does not clip.
+- The rendered transcript has no unresolved repeated take, clipped sentence, or unexplained awkward speech gap.
+- Every speech gap above the project threshold is removed or explicitly justified against visible viewer needs.
+- Every instruction still has enough visual context to follow.
+- Every focus crop contains its target and required context.
+- The story includes the project brief's required roles.
+- Claims and proof agree with what is visible.
+- A final report records pass, fail, or unknown for each gate. Unknown is not a pass.
+
+The final MP4 may be delivered only after all required gates pass. Cleanup is job-scoped and must never delete another project's outputs.

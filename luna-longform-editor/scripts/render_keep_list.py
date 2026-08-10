@@ -43,6 +43,9 @@ def main() -> int:
         default=18.0,
         help="Tiny fade at cut edges to avoid clicks/static without sounding like a dissolve.",
     )
+    parser.add_argument("--target-lufs", type=float, default=-16.0)
+    parser.add_argument("--true-peak", type=float, default=-1.5)
+    parser.add_argument("--loudness-range", type=float, default=11.0)
     args = parser.parse_args()
 
     source = Path(args.input)
@@ -86,7 +89,11 @@ def main() -> int:
         concat_inputs.append(f"[v{i}][a{i}]")
 
     filter_parts.append(
-        "".join(concat_inputs) + f"concat=n={len(segments)}:v=1:a=1[vout][aout]"
+        "".join(concat_inputs) + f"concat=n={len(segments)}:v=1:a=1[vout][ajoined]"
+    )
+    filter_parts.append(
+        f"[ajoined]loudnorm=I={args.target_lufs}:TP={args.true_peak}:"
+        f"LRA={args.loudness_range}[aout]"
     )
     filter_complex = ";".join(filter_parts)
 

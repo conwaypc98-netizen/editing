@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "title": "",
+  "story": "",
+  "shots": [
+    {
+      "id": "shot-001",
+      "story_role": "hook",
+      "viewer_purpose": "",
+      "rationale": "",
+      "continuity": "",
+      "narration": "",
+      "computer_actions": [],
+      "required_visual_state": "",
+      "video": null,
+      "voiceover": null,
+      "timing_mode": "fit",
+      "maximum_recording_seconds": null,
+      "allow_trim": false,
+      "target_box": null,
+      "include_boxes": [],
+      "recording_review": {
+        "passed": null,
+        "required_visual_state_visible": null,
+        "no_private_information": null,
+        "cursor_deliberate": null,
+        "evidence_times": [],
+        "notes": ""
+      },
+      "voice_review": {
+        "passed": null,
+        "pronunciation_clear": null,
+        "cadence_natural": null,
+        "no_audio_artifacts": null,
+        "notes": ""
+      },
+      "transition": "cut"
+    }
+  ]
+}
