@@ -1,6 +1,6 @@
 # Luna Longform Director - Windows Portable
 
-This folder contains the full `luna-longform-editor` Codex skill, including the job orchestrator, evidence dossier, reasoned-plan validator, desktop recorder, xAI custom-voice integration, shot assembler, final acceptance auditor, intro/zoom tools, and Windows wrappers.
+This folder contains the full `luna-longform-editor` Codex skill, including the job orchestrator, evidence dossier, reasoned-plan validator, desktop recorder, exact-window state capture, xAI custom-voice integration, shot assembler, final acceptance auditor, intro/zoom tools, and Windows wrappers.
 
 ## What You Need On Windows
 
@@ -93,6 +93,16 @@ List the screen recorder help:
 ```powershell
 python .\luna-longform-editor\scripts\record_desktop.py --help
 ```
+
+When full-screen recording does not contain the app Codex is controlling, list native Windows windows and capture the exact handle instead:
+
+```powershell
+python .\luna-longform-editor\scripts\capture_window_storyboard.py windows --owner SystemSettings --title-contains "Network"
+python .\luna-longform-editor\scripts\capture_window_storyboard.py capture --window-id 123456 --manifest ".\shot.capture.json" --image ".\shot-frames\0001.png" --hold-seconds 1.5 --action "Open Network settings" --visual-state "The Network settings page is readable"
+python .\luna-longform-editor\scripts\capture_window_storyboard.py render --manifest ".\shot.capture.json" --output ".\shot.mp4" --resolution 2560x1440 --fps 60
+```
+
+Use the decimal `window_id` returned by the first command. Broad selectors that match more than one window are refused, so the intended app cannot be chosen silently. The capture command also refuses minimized windows, blank client areas, changed target processes, and stale frame bytes, but Codex must still inspect the actual image before sealing the recording review. Some protected or hardware-rendered apps may block native capture; bring the app on screen and retake with the full-screen recorder when that happens.
 
 ## Important
 

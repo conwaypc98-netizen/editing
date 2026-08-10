@@ -132,7 +132,7 @@ Use when the user wants Codex to replace manual recording.
    - Use Computer Use to perform only the actions listed in the shot.
    - Continue until the required visual state is clearly visible.
    - Stop recording and inspect the actual captured frames. Accessibility success is not foreground proof; reject a take if the recorder captured Codex or another app.
-   - When Computer Use can operate an app but the full-screen recorder cannot see it, capture the exact clean app state after each consequential action with `capture_window_storyboard.py`, then render those reviewed states to the shot's MP4 path. The state storyboard is a deliberate edited tutorial shot, not permission to omit required steps.
+   - When Computer Use can operate an app but the full-screen recorder cannot see it, use `capture_window_storyboard.py windows` to identify the exact macOS or Windows app by owner/process, title, or window ID. Capture the clean state after each consequential action, inspect the actual image pixels, then render those reviewed states to the shot's MP4 path. The state storyboard is a deliberate edited tutorial shot, not permission to omit required steps.
    - Retake if the cursor hunts, a dialog is obscured, private information appears, the promised state is absent, or the narration claim and visible result disagree.
 9. Seal recording and voice reviews with `seal_production_review.py`. Review sidecars must contain concrete notes and bind the current shot-spec hash, media hash, and evidence frames/audit. Never hand-edit a stale hash into passing state.
 10. Run `production_director.py --execute-safe` again. It assembles only sealed shots, applies the generated focus zooms, transcribes the exact final candidate, audits that transcript against the approved script and creator profile, builds fail-closed QA templates, and pauses for adversarial frame/gap review.
@@ -187,7 +187,7 @@ After manifest cleanup, the job retains only `delivery/final.mp4`. Never delete 
 - `build_editorial_dossier.py`: combine technical, transcript, duplicate, pacing, and frame evidence.
 - `validate_edit_plan.py`: reject unreasoned, unsafe, discontinuous, or duplicate-preserving plans.
 - `record_desktop.py`: cross-platform desktop shot recording without microphone audio.
-- `capture_window_storyboard.py`: capture exact macOS app states when full-screen recording cannot see the Computer Use target, then render a deterministic MP4 shot.
+- `capture_window_storyboard.py`: capture exact macOS or Windows app states by owner/process, title, or window ID when full-screen recording cannot see the Computer Use target, reject blank captures, then render a deterministic MP4 shot.
 - `production_director.py`: resumable evidence-derived state machine for synthetic production.
 - `production_evidence.py`, `validate_shot_plan.py`, `seal_production_review.py`: immutable shot hashes and exact-media review gates.
 - `creator_fidelity.py`, `audit_creator_fidelity.py`: measurable creator fingerprint plus plan/final likeness and narration/visual-contract gates.

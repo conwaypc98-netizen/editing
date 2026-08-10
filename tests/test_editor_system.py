@@ -5,15 +5,27 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 from pathlib import Path
-
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "luna-longform-editor" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from capture_window_storyboard import (  # noqa: E402
+    build_parser,
+    image_signal_stats,
+    window_matches,
+)
 from creator_fidelity import transcript_style  # noqa: E402
+from production_director import (  # noqa: E402
+    accepted_delivery_is_current,
+    creator_report_is_current,
+    derive_status,
+    manifest_final_path,
+    report_is_fresh,
+    transcriber_python,
+)
 from production_evidence import (  # noqa: E402
     media_identity,
     narration_sha256,
@@ -24,15 +36,9 @@ from production_evidence import (  # noqa: E402
     validate_shot_plan,
     xai_voice_provenance_errors,
 )
-from production_director import (  # noqa: E402
-    accepted_delivery_is_current,
-    creator_report_is_current,
-    derive_status,
-    manifest_final_path,
-    report_is_fresh,
-    transcriber_python,
-)
 from verify_final_video import creator_fidelity_gate  # noqa: E402
+
+storyboard_parser = build_parser
 
 
 def run_script(name: str, *args: str) -> subprocess.CompletedProcess:
@@ -2022,13 +2028,282 @@ class ShotAssemblyTests(unittest.TestCase):
 
 
 class WindowStoryboardTests(unittest.TestCase):
+    def test_blank_capture_is_distinguished_from_real_ui_pixels(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            black = Path(temporary) / "black.png"
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=640x360:d=0.1",
+                    "-frames:v",
+                    "1",
+                    str(black),
+                ],
+                check=True,
+            )
+            self.assertFalse(image_signal_stats(black)["non_uniform"])
+
+            blank_client = Path(temporary) / "blank-client.png"
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=640x360:d=0.1",
+                    "-vf",
+                    "drawbox=x=0:y=0:w=iw:h=32:color=white:t=fill",
+                    "-frames:v",
+                    "1",
+                    str(blank_client),
+                ],
+                check=True,
+            )
+            blank_client_stats = image_signal_stats(blank_client)
+            self.assertGreater(blank_client_stats["luma_range"], 4.0)
+            self.assertFalse(blank_client_stats["non_uniform"])
+
+            real = REPO / "luna-longform-editor" / "assets" / "luna_intro_background.png"
+            self.assertTrue(image_signal_stats(real)["non_uniform"])
+
+    def test_window_selector_matches_windows_process_title_and_handle(self):
+        window = {
+            "window_id": 4242,
+            "owner": "SystemSettings",
+            "title": "Settings - Network & internet",
+        }
+        self.assertTrue(window_matches(window, "SystemSettings.exe", "network", 4242))
+        self.assertFalse(window_matches(window, "explorer", "network", 4242))
+        self.assertFalse(window_matches(window, "SystemSettings", "display", 4242))
+        self.assertFalse(window_matches(window, "SystemSettings", "network", 9999))
+
+    def test_storyboard_parser_accepts_exact_windows_handle(self):
+        args = storyboard_parser().parse_args(
+            [
+                "capture",
+                "--window-id",
+                "4242",
+                "--manifest",
+                "capture.json",
+                "--image",
+                "state.png",
+                "--hold-seconds",
+                "1.5",
+                "--action",
+                "Open network settings",
+                "--visual-state",
+                "Network settings are visible",
+            ]
+        )
+        self.assertEqual(args.window_id, 4242)
+        self.assertIsNone(args.owner)
+
+    def test_capture_rejects_an_ambiguous_broad_window_selector(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = storyboard_parser().parse_args(
+                [
+                    "capture",
+                    "--owner",
+                    "Explorer",
+                    "--manifest",
+                    str(root / "capture.json"),
+                    "--image",
+                    str(root / "state.png"),
+                    "--hold-seconds",
+                    "1.0",
+                    "--action",
+                    "Show Downloads",
+                    "--visual-state",
+                    "Downloads is visible",
+                ]
+            )
+            windows = [
+                {
+                    "window_id": window_id,
+                    "owner": "Explorer",
+                    "process_id": 9001,
+                    "title": title,
+                    "onscreen": True,
+                }
+                for window_id, title in ((100, "Downloads"), (200, "Documents"))
+            ]
+            with (
+                patch("capture_window_storyboard.available_windows", return_value=windows),
+                patch("capture_window_storyboard.capture_window_image") as capture,
+                self.assertRaisesRegex(SystemExit, "multiple windows"),
+            ):
+                args.func(args)
+            capture.assert_not_called()
+
+    def test_rejected_capture_does_not_replace_an_existing_good_frame(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image = root / "state.png"
+            image.write_bytes(b"previous reviewed frame")
+            args = storyboard_parser().parse_args(
+                [
+                    "capture",
+                    "--window-id",
+                    "4242",
+                    "--manifest",
+                    str(root / "capture.json"),
+                    "--image",
+                    str(image),
+                    "--hold-seconds",
+                    "1.5",
+                    "--action",
+                    "Open network settings",
+                    "--visual-state",
+                    "Network settings are visible",
+                    "--overwrite",
+                ]
+            )
+            fake_window = {
+                "window_id": 4242,
+                "owner": "SystemSettings",
+                "title": "Settings",
+                "bounds": {"Width": 640, "Height": 360},
+                "minimized": False,
+            }
+
+            def write_rejected_capture(_window, path):
+                path.write_bytes(b"blank capture")
+
+            with (
+                patch(
+                    "capture_window_storyboard.available_windows",
+                    return_value=[fake_window],
+                ),
+                patch(
+                    "capture_window_storyboard.capture_window_image",
+                    side_effect=write_rejected_capture,
+                ),
+                patch(
+                    "capture_window_storyboard.image_signal_stats",
+                    return_value={"non_uniform": False},
+                ),
+                self.assertRaises(SystemExit),
+            ):
+                args.func(args)
+
+            self.assertEqual(image.read_bytes(), b"previous reviewed frame")
+            self.assertFalse(list(root.glob("*-capture-*")))
+
+    def test_successful_retake_replaces_the_existing_manifest_frame(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image = root / "state.png"
+            image.write_bytes(b"old frame")
+            fake_window = {
+                "window_id": 4242,
+                "owner": "SystemSettings",
+                "process_id": 9001,
+                "title": "Settings",
+                "bounds": {"Width": 640, "Height": 360},
+                "minimized": False,
+            }
+            identity = media_identity(image)
+            identity["path"] = image.name
+            manifest = root / "capture.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "capture_mode": "state_storyboard",
+                        "platform": "Darwin",
+                        "selector": {"window_id": 4242},
+                        "target_window": {
+                            "platform": "Darwin",
+                            "owner": "SystemSettings",
+                            "process_id": 9001,
+                            "initial_window_id": 4242,
+                            "initial_title": "Settings",
+                        },
+                        "frames": [
+                            {
+                                "index": 1,
+                                "image": image.name,
+                                "hold_seconds": 1.0,
+                                "action": "Old action",
+                                "visual_state": "Old state",
+                                "platform": "Darwin",
+                                "window": fake_window,
+                                "signal_stats": {"non_uniform": True},
+                                "media_identity": identity,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = storyboard_parser().parse_args(
+                [
+                    "capture",
+                    "--window-id",
+                    "4242",
+                    "--manifest",
+                    str(manifest),
+                    "--image",
+                    str(image),
+                    "--hold-seconds",
+                    "1.5",
+                    "--action",
+                    "New action",
+                    "--visual-state",
+                    "New state",
+                    "--overwrite",
+                ]
+            )
+
+            def write_retake(_window, path):
+                path.write_bytes(b"new frame")
+
+            with (
+                patch(
+                    "capture_window_storyboard.available_windows",
+                    return_value=[fake_window],
+                ),
+                patch(
+                    "capture_window_storyboard.capture_window_image",
+                    side_effect=write_retake,
+                ),
+                patch(
+                    "capture_window_storyboard.image_signal_stats",
+                    return_value={"non_uniform": True, "luma_range": 100.0},
+                ),
+                patch("builtins.print"),
+            ):
+                self.assertEqual(args.func(args), 0)
+
+            updated = json.loads(manifest.read_text())
+            self.assertEqual(len(updated["frames"]), 1)
+            self.assertEqual(updated["frames"][0]["index"], 1)
+            self.assertEqual(updated["frames"][0]["action"], "New action")
+            self.assertEqual(updated["frames"][0]["media_identity"]["sha256"], hashlib.sha256(b"new frame").hexdigest())
+            self.assertEqual(image.read_bytes(), b"new frame")
+
     def test_render_binds_exact_frames_and_expected_duration(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             frames_dir = root / "frames"
             frames_dir.mkdir()
             frames = []
-            for index, color in enumerate(("black", "white"), start=1):
+            for index, source in enumerate(
+                ("testsrc=size=640x360:rate=1", "smptebars=size=640x360:rate=1"),
+                start=1,
+            ):
                 image = frames_dir / f"{index:04d}.png"
                 subprocess.run(
                     [
@@ -2040,7 +2315,7 @@ class WindowStoryboardTests(unittest.TestCase):
                         "-f",
                         "lavfi",
                         "-i",
-                        f"color=c={color}:s=640x360:d=0.1",
+                        source,
                         "-frames:v",
                         "1",
                         str(image),
@@ -2049,6 +2324,13 @@ class WindowStoryboardTests(unittest.TestCase):
                 )
                 identity = media_identity(image)
                 identity["path"] = f"frames/{image.name}"
+                window = {
+                    "window_id": 4241 + index,
+                    "owner": "SystemSettings",
+                    "process_id": 9001,
+                    "title": f"Settings state {index}",
+                    "bounds": {"Width": 640, "Height": 360},
+                }
                 frames.append(
                     {
                         "index": index,
@@ -2056,6 +2338,9 @@ class WindowStoryboardTests(unittest.TestCase):
                         "hold_seconds": 1.0,
                         "action": f"Show state {index}",
                         "visual_state": f"State {index} is clearly visible.",
+                        "platform": "Windows",
+                        "window": window,
+                        "signal_stats": image_signal_stats(image),
                         "media_identity": identity,
                     }
                 )
@@ -2063,8 +2348,17 @@ class WindowStoryboardTests(unittest.TestCase):
             manifest.write_text(
                 json.dumps(
                     {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "capture_mode": "state_storyboard",
+                        "platform": "Windows",
+                        "selector": {"owner": "SystemSettings"},
+                        "target_window": {
+                            "platform": "Windows",
+                            "owner": "SystemSettings",
+                            "process_id": 9001,
+                            "initial_window_id": 4242,
+                            "initial_title": "Settings state 1",
+                        },
                         "frames": frames,
                     }
                 ),
@@ -2093,6 +2387,22 @@ class WindowStoryboardTests(unittest.TestCase):
             self.assertAlmostEqual(rendered["expected_duration_seconds"], 2.0, places=2)
             duration = float(rendered["probe"]["format"]["duration"])
             self.assertAlmostEqual(duration, 2.0, delta=0.08)
+
+            changed_manifest = json.loads(manifest.read_text())
+            changed_manifest["frames"][1]["window"]["owner"] = "Explorer"
+            manifest.write_text(json.dumps(changed_manifest), encoding="utf-8")
+            rejected = run_script(
+                "capture_window_storyboard.py",
+                "render",
+                "--manifest",
+                str(manifest),
+                "--output",
+                str(root / "rejected.mp4"),
+                "--resolution",
+                "640x360",
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("owner/process name", rejected.stdout + rejected.stderr)
 
 
 if __name__ == "__main__":

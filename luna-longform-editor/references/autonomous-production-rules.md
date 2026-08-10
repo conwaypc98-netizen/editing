@@ -76,7 +76,7 @@ The validator must reject plans that lack these fields. "It looked okay" is not 
 - Keep a shot running until the required visual state is visibly achieved.
 - Restore changed settings when the shot is only a demonstration and the project brief requires restoration.
 - Accessibility actions can succeed while another app remains in the screen recording. Inspect the recorded pixels before sealing the shot; never infer foreground capture from the accessibility tree.
-- On macOS, when the Codex host prevents the operated app from appearing in full-screen capture, use `capture_window_storyboard.py` to capture the exact window after each consequential action and render those evidence states into the shot MP4. Keep enough states to show prerequisites, action, and result. This is a capture fallback, not a substitute for doing the action.
+- On macOS or Windows, when the Codex host prevents the operated app from appearing in full-screen capture, use `capture_window_storyboard.py windows` to identify the target by owner/process, title, or exact window ID. Capture the exact window after each consequential action and render those evidence states into the shot MP4. Restore minimized windows first, inspect every captured image rather than trusting API success, and keep enough states to show prerequisites, action, and result. This is a capture fallback, not a substitute for doing the action.
 
 ## Retake And Invalidation Loop
 

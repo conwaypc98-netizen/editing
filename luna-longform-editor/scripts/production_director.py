@@ -552,9 +552,13 @@ def derive_status(job: Path) -> dict:
                 "manifest": str(output.with_suffix(".capture.json")),
                 "frames_directory": str(output.with_suffix(".capture-frames")),
                 "capture_script": str(SCRIPT_DIR / "capture_window_storyboard.py"),
+                "selector_method": (
+                    "List windows, then select the intended macOS/Windows app by owner/process, "
+                    "title substring, or exact window ID. Restore it before capture if minimized."
+                ),
                 "required_method": (
                     "Capture the clean pre-action state, each consequential action/result, and the final proof state; "
-                    "then render the storyboard to the exact video path above."
+                    "inspect every captured image for the intended real UI, then render the storyboard to the exact video path above."
                 ),
             },
         )
