@@ -1,4 +1,4 @@
 interface:
   display_name: "Luna Longform Director"
-  short_description: "Direct, record, narrate, edit, and verify Luna tutorials"
-  default_prompt: "Use $luna-longform-editor to autonomously produce this Luna tutorial with evidence-backed editorial decisions, verified owner-approved voice narration when configured, and fail-closed final QA."
+  short_description: "Direct, record, narrate, edit, and verify"
+  default_prompt: "Use $luna-longform-editor to resume an evidence-bound Luna edit or autonomous tutorial until every semantic, media, voice, visual, and final QA gate passes."

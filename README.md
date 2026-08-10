@@ -9,6 +9,8 @@ It supports two workflows:
 
 This is deliberately not a silence remover. Every kept range must explain its story role, viewer purpose, take choice, continuity, and evidence. Final visual review is fail-closed: an unreviewed crop or timeline is not considered passing.
 
+Synthetic production is resumable rather than conversationally memorized. `production_director.py` derives the next stage from an immutable shot-plan hash, exact media hashes, sealed recording/voice sidecars, transcripts, and final QA files. Replacing media or changing a shot automatically makes the affected reviews stale.
+
 ## Windows Install
 
 Download or clone this repo on Windows, open PowerShell in the repo folder, then run:
@@ -42,10 +44,24 @@ Use the luna-longform-editor skill on "C:\path\to\video.mov". Create an isolated
 For autonomous recording, use:
 
 ```text
-Use the luna-longform-editor skill in synthetic mode. Build a project brief and per-shot desktop plan for this topic: <topic>. Record and verify every desktop shot, then use my verified xAI voice ID from XAI_VOICE_ID for per-shot narration. Transcribe and audit each generated line, complete the listening review, then assemble, revise, and accept only a fully passing final.
+Use the luna-longform-editor skill in synthetic mode. Build and validate an immutable project/shot plan for this topic: <topic>. Resume it with production_director.py --execute-safe. Use Computer Use to produce each desktop shot, seal exact-media recording and voice reviews, use my verified xAI voice ID from XAI_VOICE_ID, and keep resuming until the rebuilt final passes the adversarial visual, transcript, loudness, decode, plan, and zoom gates. Never infer that a background app was captured; inspect the actual pixels and retake or use the macOS window-state storyboard fallback.
 ```
 
-The one manual voice step is creating and verifying your own custom voice in the xAI console. After that, set `XAI_API_KEY` and `XAI_VOICE_ID`; the workflow can generate narration automatically. API keys are never stored in the repo.
+The one-time voice step is creating and verifying your own custom voice in the xAI console. After that, set `XAI_API_KEY` and `XAI_VOICE_ID`; the workflow verifies the chosen voice, generates per-shot WAV/timestamp metadata, transcribes each result, and still requires a real listening verdict. API keys are never stored in the repo.
+
+An owner-consented reference from an accepted video can be prepared locally with:
+
+```bash
+python3 luna-longform-editor/scripts/prepare_voice_reference.py --input accepted-video.mp4 --transcript-json transcript.json --output owner-reference.wav --report owner-reference-report.json --owner-consent-confirmed
+```
+
+Listen to that reference and check it for music, other speakers, private audio, and clipped boundaries before uploading it.
+
+For an existing synthetic job, the canonical resume command is:
+
+```bash
+python3 luna-longform-editor/scripts/production_director.py --job "/path/to/job" --execute-safe
+```
 
 If you have not installed it yet, use:
 

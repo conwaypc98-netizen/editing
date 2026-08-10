@@ -15,6 +15,9 @@ Included:
 - luna-longform-editor/scripts/*.py
 - luna-longform-editor/scripts/*.sh
 - luna-longform-editor/scripts/*.ps1
+- Resumable production director with immutable shot/media evidence sidecars
+- Consent-gated xAI voice-reference preparation, voice verification, retry, timestamps, and per-shot audits
+- Cross-platform desktop recorder plus macOS exact-window state-storyboard capture fallback
 - tests/test_editor_system.py
 - Install-Windows.ps1
 - README_WINDOWS.md

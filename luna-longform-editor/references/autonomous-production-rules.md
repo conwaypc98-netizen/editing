@@ -15,9 +15,12 @@ The agent writes a project brief and a shot plan before touching the desktop. Ea
 - The visual state that proves the action succeeded.
 - Any UI regions that must stay visible.
 - A maximum acceptable duration and whether timing may be adjusted.
-- A recording-review verdict with evidence times, visible-state confirmation, privacy confirmation, and deliberate-cursor confirmation.
+
+Validate this immutable shot specification before generating media. Do not store recording or voice verdicts in the shot plan. Seal them separately under `qa/reviews/recording/` and `qa/reviews/voice/`, bound to both the current shot-spec hash and exact media bytes.
 
 Record shots separately. A failed or confusing shot is retaken; it is not hidden by narration. Generate cloned-voice narration per shot, then assemble only when the shot duration and narration duration are compatible.
+
+Run `production_director.py --job <job> --execute-safe` as the resume loop. It may automate validation, xAI generation, transcription, audits, assembly, zoom rendering, QA generation, and acceptance. It must stop for ownership/configuration, actual voice listening, Computer Use, exact visual review, or a failed adversarial gate. Completing one of those actions does not authorize inventing evidence for another.
 
 ## Director Contract
 
@@ -49,6 +52,8 @@ The validator must reject plans that lack these fields. "It looked okay" is not 
 - Generate narration per shot so pacing can be directed with xAI speech tags and visual timing can be verified.
 - Listen or transcribe the synthesized narration before assembly. Reject mispronounced product names, unnatural emphasis, missing words, and cadence that does not match the channel profile.
 - Require both a passing transcript-comparison report and an explicit per-shot listening review before assembly.
+- Verify the configured xAI voice before synthesis. Preserve xAI timestamps and request metadata, retry only transient 429/500/503 failures with bounded exponential backoff, and never log the API key.
+- Treat changing a narration line or replacing its audio bytes as automatic invalidation of the listening verdict.
 
 ## Desktop Recording Rules
 
@@ -58,6 +63,18 @@ The validator must reject plans that lack these fields. "It looked okay" is not 
 - The cursor must move deliberately. Remove hunting, repeated clicks, accidental menus, and waiting.
 - Keep a shot running until the required visual state is visibly achieved.
 - Restore changed settings when the shot is only a demonstration and the project brief requires restoration.
+- Accessibility actions can succeed while another app remains in the screen recording. Inspect the recorded pixels before sealing the shot; never infer foreground capture from the accessibility tree.
+- On macOS, when the Codex host prevents the operated app from appearing in full-screen capture, use `capture_window_storyboard.py` to capture the exact window after each consequential action and render those evidence states into the shot MP4. Keep enough states to show prerequisites, action, and result. This is a capture fallback, not a substitute for doing the action.
+
+## Retake And Invalidation Loop
+
+1. Plan and validate the immutable shot specification.
+2. Generate/capture media.
+3. Audit words and inspect pixels from the exact media.
+4. Seal voice and recording sidecars.
+5. Assemble and run final evidence generation.
+6. Try to disprove the result: wrong app, stale state, claim/visual mismatch, private content, clipped narration, awkward cadence, bad crop, or synthetic-looking transition.
+7. If any item fails, revise the responsible plan or media. Do not preserve downstream passing flags; their hashes must become stale and the director must rebuild them.
 
 ## Acceptance Gates
 

@@ -7,6 +7,15 @@ import json
 import re
 from pathlib import Path
 
+from production_evidence import (
+    media_identity,
+    narration_sha256,
+    resolve_media,
+    shot_plan_spec_sha256,
+    shot_spec_sha256,
+    transcript_source_errors,
+)
+
 
 def tokens(value: str) -> list[str]:
     return re.findall(r"[a-z0-9']+", value.lower())
@@ -38,6 +47,28 @@ def resolve_transcripts(values: list[str], directory: Path | None, shot_ids: lis
             found = next((candidate for candidate in candidates if candidate.is_file()), None)
             if found:
                 mapping.setdefault(shot_id, found.resolve())
+    return mapping
+
+
+def resolve_voiceovers(
+    values: list[str],
+    directory: Path | None,
+    plan_path: Path,
+    shots: list[dict],
+) -> dict[str, Path]:
+    mapping = {}
+    for value in values:
+        if "=" not in value:
+            raise SystemExit("--voiceover must be SHOT_ID=AUDIO_PATH")
+        shot_id, path = value.split("=", 1)
+        mapping[shot_id.strip()] = Path(path).expanduser().resolve()
+    for index, shot in enumerate(shots, start=1):
+        shot_id = str(shot.get("id", f"shot-{index:03d}"))
+        plan_media = resolve_media(shot.get("voiceover"), plan_path.parent)
+        candidates = [plan_media, directory / f"{shot_id}.wav" if directory else None]
+        found = next((candidate for candidate in candidates if candidate and candidate.is_file()), None)
+        if found:
+            mapping.setdefault(shot_id, found.resolve())
     return mapping
 
 
@@ -94,6 +125,8 @@ def main() -> int:
     parser.add_argument("--shot-plan", required=True)
     parser.add_argument("--transcript", action="append", default=[])
     parser.add_argument("--transcript-dir")
+    parser.add_argument("--voiceover", action="append", default=[])
+    parser.add_argument("--voiceover-dir")
     parser.add_argument("--minimum-similarity", type=float, default=0.86)
     parser.add_argument("--maximum-missing-fraction", type=float, default=0.10)
     parser.add_argument("--report", required=True)
@@ -107,14 +140,22 @@ def main() -> int:
     shot_ids = [str(shot.get("id", f"shot-{index:03d}")) for index, shot in enumerate(shots, start=1)]
     transcript_dir = Path(args.transcript_dir).expanduser().resolve() if args.transcript_dir else None
     mapping = resolve_transcripts(args.transcript, transcript_dir, shot_ids)
+    voiceover_dir = Path(args.voiceover_dir).expanduser().resolve() if args.voiceover_dir else None
+    voiceovers = resolve_voiceovers(args.voiceover, voiceover_dir, plan_path, shots)
 
     results = []
     errors = []
     for index, shot in enumerate(shots, start=1):
         shot_id = str(shot.get("id", f"shot-{index:03d}"))
         path = mapping.get(shot_id)
+        voiceover = voiceovers.get(shot_id)
         if path is None or not path.is_file():
             message = f"{shot_id} transcript is missing."
+            errors.append(message)
+            results.append({"id": shot_id, "passed": False, "errors": [message]})
+            continue
+        if voiceover is None or not voiceover.is_file():
+            message = f"{shot_id} voiceover media is missing."
             errors.append(message)
             results.append({"id": shot_id, "passed": False, "errors": [message]})
             continue
@@ -125,12 +166,21 @@ def main() -> int:
             args.minimum_similarity,
             args.maximum_missing_fraction,
         )
+        source_errors = transcript_source_errors(path, voiceover)
+        if source_errors:
+            comparison["errors"].extend(source_errors)
+            comparison["passed"] = False
         if not comparison["passed"]:
             errors.extend(f"{shot_id}: {message}" for message in comparison["errors"])
         results.append(
             {
                 "id": shot_id,
                 "transcript": str(path),
+                "transcript_identity": media_identity(path),
+                "voiceover": str(voiceover),
+                "voiceover_identity": media_identity(voiceover),
+                "shot_spec_sha256": shot_spec_sha256(shot),
+                "narration_sha256": narration_sha256(str(shot.get("narration", ""))),
                 "actual_text": actual,
                 **comparison,
             }
@@ -140,6 +190,7 @@ def main() -> int:
         "schema_version": 1,
         "shot_plan": str(plan_path),
         "shot_plan_sha256": sha256_file(plan_path),
+        "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
         "passed": not errors,
         "errors": errors,
         "shots": results,

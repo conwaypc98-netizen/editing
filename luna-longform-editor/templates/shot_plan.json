@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "title": "",
   "story": "",
   "shots": [
@@ -19,21 +19,6 @@
       "allow_trim": false,
       "target_box": null,
       "include_boxes": [],
-      "recording_review": {
-        "passed": null,
-        "required_visual_state_visible": null,
-        "no_private_information": null,
-        "cursor_deliberate": null,
-        "evidence_times": [],
-        "notes": ""
-      },
-      "voice_review": {
-        "passed": null,
-        "pronunciation_clear": null,
-        "cadence_natural": null,
-        "no_audio_artifacts": null,
-        "notes": ""
-      },
       "transition": "cut"
     }
   ]

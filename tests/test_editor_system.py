@@ -5,11 +5,29 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "luna-longform-editor" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+from production_evidence import (  # noqa: E402
+    media_identity,
+    narration_sha256,
+    shot_plan_spec_sha256,
+    shot_spec_sha256,
+    transcript_source_errors,
+    validate_sealed_review,
+    xai_voice_provenance_errors,
+)
+from production_director import (  # noqa: E402
+    derive_status,
+    manifest_final_path,
+    report_is_fresh,
+    transcriber_python,
+)
 
 
 def run_script(name: str, *args: str) -> subprocess.CompletedProcess:
@@ -20,11 +38,551 @@ def run_script(name: str, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def write_passing_shot_evidence(
+    job: Path,
+    plan_data: dict,
+    video: Path,
+    voice: Path,
+    include_audit: bool = True,
+) -> None:
+    shot = plan_data["shots"][0]
+    shot_id = shot["id"]
+    recording_dir = job / "qa" / "reviews" / "recording"
+    voice_dir = job / "qa" / "reviews" / "voice"
+    recording_dir.mkdir(parents=True, exist_ok=True)
+    voice_dir.mkdir(parents=True, exist_ok=True)
+    (recording_dir / f"{shot_id}.json").write_text(
+        json.dumps(
+            {
+                "kind": "recording_review",
+                "shot_id": shot_id,
+                "shot_spec_sha256": shot_spec_sha256(shot),
+                "media_identity": media_identity(video),
+                "passed": True,
+                "evidence": [{"time": 0.5, "frame": "fixture.png", "frame_sha256": "fixture"}],
+                "verdict": {
+                    "required_visual_state_visible": True,
+                    "no_private_information": True,
+                    "cursor_deliberate": True,
+                    "ui_readable": True,
+                    "actions_complete": True,
+                    "notes": "The synthetic fixture visibly contains the required state.",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (voice_dir / f"{shot_id}.json").write_text(
+        json.dumps(
+            {
+                "kind": "voice_review",
+                "shot_id": shot_id,
+                "shot_spec_sha256": shot_spec_sha256(shot),
+                "media_identity": media_identity(voice),
+                "passed": True,
+                "verdict": {
+                    "pronunciation_clear": True,
+                    "cadence_natural": True,
+                    "no_audio_artifacts": True,
+                    "speaker_identity_match": True,
+                    "emotional_delivery_match": True,
+                    "notes": "The synthetic fixture has clean and intentionally reviewed audio.",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    if not include_audit:
+        return
+    (job / "qa" / "voiceover_audit.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "shot_plan_spec_sha256": shot_plan_spec_sha256(plan_data),
+                "shots": [
+                    {
+                        "id": shot_id,
+                        "passed": True,
+                        "shot_spec_sha256": shot_spec_sha256(shot),
+                        "narration_sha256": narration_sha256(shot["narration"]),
+                        "voiceover_identity": media_identity(voice),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 class CompatibilityTests(unittest.TestCase):
     def test_python_scripts_parse_with_python_310_grammar(self):
         for script in SCRIPTS.glob("*.py"):
             with self.subTest(script=script.name):
                 ast.parse(script.read_text(encoding="utf-8"), filename=str(script), feature_version=(3, 10))
+
+
+class ProductionEvidenceTests(unittest.TestCase):
+    def test_mutable_review_fields_do_not_change_shot_spec_hash(self):
+        shot = {
+            "id": "shot-001",
+            "story_role": "hook",
+            "viewer_purpose": "State the result.",
+            "rationale": "Direct opening.",
+            "continuity": "Starts the video.",
+            "narration": "Lower your ping with these settings.",
+            "computer_actions": ["Show Network Connections"],
+            "required_visual_state": "Ethernet adapter is visible.",
+            "timing_mode": "fit",
+            "maximum_recording_seconds": 5.0,
+        }
+        original = shot_spec_sha256(shot)
+        shot["recording_review"] = {"passed": True}
+        shot["voice_review"] = {"passed": True}
+        shot["video"] = "new-location.mp4"
+        shot["voiceover"] = "new-location.wav"
+        self.assertEqual(original, shot_spec_sha256(shot))
+        shot["narration"] = "This changed approved narration."
+        self.assertNotEqual(original, shot_spec_sha256(shot))
+
+    def test_media_change_invalidates_sealed_review(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            media = root / "shot.mp4"
+            media.write_bytes(b"reviewed bytes")
+            shot = {
+                "id": "shot-001",
+                "story_role": "hook",
+                "viewer_purpose": "State the result.",
+                "rationale": "Direct opening.",
+                "continuity": "Starts the video.",
+                "narration": "Test line.",
+                "computer_actions": ["Show state"],
+                "required_visual_state": "State is visible.",
+                "timing_mode": "fit",
+                "maximum_recording_seconds": 2.0,
+            }
+            review = {
+                "kind": "recording_review",
+                "shot_id": "shot-001",
+                "shot_spec_sha256": shot_spec_sha256(shot),
+                "media_identity": media_identity(media),
+                "passed": True,
+                "evidence": [{"time": 0.5}],
+                "verdict": {
+                    "required_visual_state_visible": True,
+                    "no_private_information": True,
+                    "cursor_deliberate": True,
+                    "ui_readable": True,
+                    "actions_complete": True,
+                    "notes": "The reviewed state is visible and readable.",
+                },
+            }
+            self.assertEqual(validate_sealed_review(review, "recording", shot, media), [])
+            media.write_bytes(b"changed after review")
+            errors = validate_sealed_review(review, "recording", shot, media)
+            self.assertTrue(any("current media bytes" in error for error in errors))
+
+    def test_xai_voice_provenance_invalidates_changed_narration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            voice = root / "shot-001.wav"
+            voice.write_bytes(b"generated voice bytes")
+            shot = {
+                "id": "shot-001",
+                "story_role": "hook",
+                "viewer_purpose": "State the result.",
+                "rationale": "Direct opening.",
+                "continuity": "Starts the video.",
+                "narration": "Use the current generated line.",
+                "computer_actions": ["Show the setting"],
+                "required_visual_state": "The setting is visible.",
+                "timing_mode": "fit",
+                "maximum_recording_seconds": 4.0,
+            }
+            sidecar = voice.with_suffix(voice.suffix + ".xai.json")
+            sidecar.write_text(
+                json.dumps(
+                    {
+                        "provider": "xai",
+                        "shot_id": shot["id"],
+                        "shot_spec_sha256": shot_spec_sha256(shot),
+                        "narration_sha256": narration_sha256(shot["narration"]),
+                        "media_identity": media_identity(voice),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(xai_voice_provenance_errors(shot, voice), [])
+            shot["narration"] = "This approved line changed."
+            errors = xai_voice_provenance_errors(shot, voice)
+            self.assertTrue(any("shot specification changed" in error for error in errors))
+            self.assertTrue(any("approved narration" in error for error in errors))
+
+    def test_transcript_source_identity_invalidates_changed_audio(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            voice = root / "shot.wav"
+            transcript = root / "transcript.json"
+            voice.write_bytes(b"first voice")
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "source_media_identity": media_identity(voice),
+                        "segments": [{"text": "First voice."}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(transcript_source_errors(transcript, voice, require_identity=True), [])
+            voice.write_bytes(b"replacement voice")
+            errors = transcript_source_errors(transcript, voice, require_identity=True)
+            self.assertTrue(any("different source-media bytes" in error for error in errors))
+
+    def test_recording_review_seals_extracted_frame_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            video = root / "shot.mp4"
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=green:s=320x180:r=30:d=1",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(video),
+                ],
+                check=True,
+            )
+            plan = root / "shot_plan.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "shots": [
+                            {
+                                "id": "shot-001",
+                                "story_role": "hook",
+                                "viewer_purpose": "Show proof.",
+                                "rationale": "Visible fixture.",
+                                "continuity": "Starts the fixture.",
+                                "narration": "The green state is visible.",
+                                "computer_actions": ["Show green state"],
+                                "required_visual_state": "Green state is visible.",
+                                "timing_mode": "fit",
+                                "maximum_recording_seconds": 2.0,
+                                "video": str(video),
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = root / "qa" / "reviews" / "recording" / "shot-001.json"
+            result = run_script(
+                "seal_production_review.py",
+                "recording",
+                "--shot-plan",
+                str(plan),
+                "--shot-id",
+                "shot-001",
+                "--evidence-time",
+                "0.5",
+                "--required-visual-state-visible",
+                "--no-private-information",
+                "--cursor-deliberate",
+                "--ui-readable",
+                "--actions-complete",
+                "--notes",
+                "The green state is centered, readable, and free of private data.",
+                "--output",
+                str(report),
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            sealed = json.loads(report.read_text())
+            self.assertTrue(sealed["passed"])
+            self.assertTrue(Path(sealed["evidence"][0]["frame"]).is_file())
+
+
+class ProductionDirectorTests(unittest.TestCase):
+    def test_fresh_manifest_has_no_accepted_output_path(self):
+        self.assertIsNone(manifest_final_path({"final_output": None}))
+        self.assertIsNone(manifest_final_path({"final_output": ""}))
+
+    def test_qa_report_becomes_stale_when_a_review_is_added(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = root / "candidate.mp4"
+            report = root / "qa.json"
+            review = root / "visual-review.json"
+            candidate.write_bytes(b"candidate")
+            report.write_text("{}", encoding="utf-8")
+            self.assertTrue(report_is_fresh(report, [candidate]))
+            review.write_text("{}", encoding="utf-8")
+            report_time = report.stat().st_mtime_ns
+            review_time = max(review.stat().st_mtime_ns, report_time + 1_000_000)
+            import os
+
+            os.utime(review, ns=(review_time, review_time))
+            self.assertFalse(report_is_fresh(report, [candidate, review]))
+
+    def test_transcriber_keeps_virtual_environment_launcher_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base_python = root / "base-python"
+            base_python.touch()
+            venv_python = root / "venv" / "bin" / "python"
+            venv_python.parent.mkdir(parents=True)
+            venv_python.symlink_to(base_python)
+            with patch.dict(
+                "os.environ",
+                {"LUNA_EDITOR_TRANSCRIBE_PYTHON": str(venv_python)},
+                clear=False,
+            ):
+                selected = transcriber_python()
+            self.assertEqual(selected, venv_python.absolute())
+            self.assertNotEqual(selected, base_python.resolve())
+
+    def test_resume_validates_plan_then_requests_voice_consent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            initialized = run_script(
+                "luna_editor.py",
+                "init",
+                "--mode",
+                "synthetic",
+                "--title",
+                "Director Test",
+                "--jobs-root",
+                str(root),
+            )
+            self.assertEqual(initialized.returncode, 0, initialized.stderr)
+            job = Path(initialized.stdout.strip())
+            project = json.loads((job / "project.json").read_text())
+            project["required_story_roles"] = ["hook"]
+            (job / "project.json").write_text(json.dumps(project), encoding="utf-8")
+            plan = {
+                "schema_version": 2,
+                "title": "Director Test",
+                "story": "Hook fixture.",
+                "shots": [
+                    {
+                        "id": "shot-001",
+                        "story_role": "hook",
+                        "viewer_purpose": "State the result.",
+                        "rationale": "Direct opening.",
+                        "continuity": "Starts the video.",
+                        "narration": "This is the director test.",
+                        "computer_actions": ["Show the desktop"],
+                        "required_visual_state": "Desktop is visible.",
+                        "timing_mode": "fit",
+                        "maximum_recording_seconds": 4.0,
+                        "target_box": None,
+                        "include_boxes": [],
+                    }
+                ],
+            }
+            (job / "plans" / "shot_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+            resumed = run_script(
+                "production_director.py",
+                "--job",
+                str(job),
+                "--execute-safe",
+            )
+            self.assertEqual(resumed.returncode, 2, resumed.stdout + resumed.stderr)
+            status = json.loads(resumed.stdout)
+            self.assertEqual(status["next"]["action"], "confirm_voice_ownership")
+            self.assertEqual(status["executed"][0]["action"], "validate_shot_plan")
+
+    def test_changed_narration_routes_stale_xai_voice_to_regeneration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary)
+            (job / "plans").mkdir()
+            (job / "qa").mkdir()
+            (job / "voice").mkdir()
+            project = {
+                "mode": "synthetic",
+                "required_story_roles": ["hook"],
+                "voice": {"provider": "xai", "owner_consent": "confirmed"},
+            }
+            (job / "project.json").write_text(json.dumps(project), encoding="utf-8")
+            original_shot = {
+                "id": "shot-001",
+                "story_role": "hook",
+                "viewer_purpose": "State the result.",
+                "rationale": "Direct opening.",
+                "continuity": "Starts the video.",
+                "narration": "This was the original line.",
+                "computer_actions": ["Show the desktop"],
+                "required_visual_state": "Desktop is visible.",
+                "timing_mode": "fit",
+                "maximum_recording_seconds": 4.0,
+            }
+            voice = job / "voice" / "shot-001.wav"
+            voice.write_bytes(b"old generated voice")
+            voice.with_suffix(".wav.xai.json").write_text(
+                json.dumps(
+                    {
+                        "provider": "xai",
+                        "shot_id": "shot-001",
+                        "shot_spec_sha256": shot_spec_sha256(original_shot),
+                        "narration_sha256": narration_sha256(original_shot["narration"]),
+                        "media_identity": media_identity(voice),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            current_shot = dict(original_shot)
+            current_shot["narration"] = "This is the newly approved line."
+            plan = {
+                "schema_version": 2,
+                "title": "Voice provenance test",
+                "story": "A changed line must regenerate.",
+                "shots": [current_shot],
+            }
+            (job / "plans" / "shot_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+            (job / "qa" / "shot_plan_validation.json").write_text(
+                json.dumps(
+                    {
+                        "passed": True,
+                        "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {}, clear=True):
+                status = derive_status(job)
+            self.assertEqual(status["next"]["action"], "configure_verified_xai_voice")
+            errors = status["next"]["provenance_errors"]["shot-001"]
+            self.assertTrue(any("shot specification changed" in error for error in errors))
+
+    def test_changed_voice_bytes_route_back_to_transcription(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary)
+            (job / "plans").mkdir()
+            (job / "qa").mkdir()
+            (job / "voice" / "transcripts" / "shot-001").mkdir(parents=True)
+            project = {
+                "mode": "synthetic",
+                "required_story_roles": ["hook"],
+                "voice": {"provider": "accepted-fixture", "owner_consent": "confirmed"},
+            }
+            (job / "project.json").write_text(json.dumps(project), encoding="utf-8")
+            shot = {
+                "id": "shot-001",
+                "story_role": "hook",
+                "viewer_purpose": "State the result.",
+                "rationale": "Direct opening.",
+                "continuity": "Starts the video.",
+                "narration": "This line is transcribed.",
+                "computer_actions": ["Show the desktop"],
+                "required_visual_state": "Desktop is visible.",
+                "timing_mode": "fit",
+                "maximum_recording_seconds": 4.0,
+            }
+            plan = {
+                "schema_version": 2,
+                "title": "Transcript provenance test",
+                "story": "Changed audio must be transcribed again.",
+                "shots": [shot],
+            }
+            (job / "plans" / "shot_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+            (job / "qa" / "shot_plan_validation.json").write_text(
+                json.dumps(
+                    {
+                        "passed": True,
+                        "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            voice = job / "voice" / "shot-001.wav"
+            voice.write_bytes(b"first voice bytes")
+            transcript = job / "voice" / "transcripts" / "shot-001" / "transcript.json"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "source_media_identity": media_identity(voice),
+                        "segments": [{"text": shot["narration"]}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            voice.write_bytes(b"replacement voice bytes")
+            with patch.dict(
+                "os.environ",
+                {"LUNA_EDITOR_TRANSCRIBE_PYTHON": sys.executable},
+                clear=True,
+            ):
+                status = derive_status(job)
+            self.assertEqual(status["next"]["action"], "transcribe_voiceover")
+            errors = status["next"]["provenance_errors"]
+            self.assertTrue(any("different source-media bytes" in error for error in errors))
+
+
+class VoiceReferenceTests(unittest.TestCase):
+    def test_reference_preparation_requires_consent_and_creates_xai_length_wav(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "accepted.wav"
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=91",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(source),
+                ],
+                check=True,
+            )
+            output = root / "reference.wav"
+            report = root / "report.json"
+            denied = run_script(
+                "prepare_voice_reference.py",
+                "--input",
+                str(source),
+                "--output",
+                str(output),
+                "--report",
+                str(report),
+                "--target-seconds",
+                "90",
+                "--maximum-seconds",
+                "90",
+            )
+            self.assertNotEqual(denied.returncode, 0)
+            allowed = run_script(
+                "prepare_voice_reference.py",
+                "--input",
+                str(source),
+                "--output",
+                str(output),
+                "--report",
+                str(report),
+                "--target-seconds",
+                "90",
+                "--maximum-seconds",
+                "90",
+                "--owner-consent-confirmed",
+            )
+            self.assertEqual(allowed.returncode, 0, allowed.stdout + allowed.stderr)
+            payload = json.loads(report.read_text())
+            self.assertGreaterEqual(payload["output_duration_seconds"], 89.9)
+            self.assertLessEqual(payload["output_duration_seconds"], 90.1)
+            self.assertTrue(payload["manual_listening_review_required"])
 
 
 class CleanupTests(unittest.TestCase):
@@ -323,6 +881,24 @@ class PlanTransformTests(unittest.TestCase):
 
 
 class VoiceTests(unittest.TestCase):
+    def test_custom_voice_id_format_is_checked_before_network(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "voice.wav"
+            invalid = run_script(
+                "xai_voiceover.py",
+                "synthesize",
+                "--text",
+                "Test narration.",
+                "--output",
+                str(output),
+                "--voice-id",
+                "NOT-A-VOICE-ID",
+                "--owner-consent-confirmed",
+                "--dry-run",
+            )
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("8 lowercase letters/digits", invalid.stderr)
+
     def test_custom_voice_dry_run_requires_consent(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "voice.wav"
@@ -371,6 +947,8 @@ class VoiceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             transcript = root / "shot-001.json"
+            voiceover = root / "shot-001.wav"
+            voiceover.write_bytes(b"reviewed-voice-fixture")
             transcript.write_text(
                 json.dumps(
                     {
@@ -390,6 +968,8 @@ class VoiceTests(unittest.TestCase):
                 str(plan),
                 "--transcript",
                 f"shot-001={transcript}",
+                "--voiceover",
+                f"shot-001={voiceover}",
                 "--report",
                 str(report),
             )
@@ -416,6 +996,8 @@ class VoiceTests(unittest.TestCase):
                 str(plan),
                 "--transcript",
                 f"shot-001={transcript}",
+                "--voiceover",
+                f"shot-001={voiceover}",
                 "--report",
                 str(report),
             )
@@ -934,42 +1516,27 @@ class ShotAssemblyTests(unittest.TestCase):
                 encoding="utf-8",
             )
             plan = plans / "shot_plan.json"
-            plan.write_text(
-                json.dumps(
+            plan_data = {
+                "schema_version": 2,
+                "shots": [
                     {
-                        "shots": [
-                            {
-                                "id": "shot-001",
-                                "story_role": "hook",
-                                "viewer_purpose": "State the result.",
-                                "rationale": "Concise opening.",
-                                "continuity": "Starts the video.",
-                                "narration": "Test line.",
-                                "computer_actions": ["Show state"],
-                                "required_visual_state": "State is visible.",
-                                "timing_mode": "fit",
-                                "maximum_recording_seconds": 2.0,
-                                "video": str(video),
-                                "voiceover": str(voice),
-                                "recording_review": {
-                                    "passed": True,
-                                    "required_visual_state_visible": True,
-                                    "no_private_information": True,
-                                    "cursor_deliberate": True,
-                                    "evidence_times": [0.5],
-                                },
-                                "voice_review": {
-                                    "passed": True,
-                                    "pronunciation_clear": True,
-                                    "cadence_natural": True,
-                                    "no_audio_artifacts": True,
-                                },
-                            }
-                        ]
+                        "id": "shot-001",
+                        "story_role": "hook",
+                        "viewer_purpose": "State the result.",
+                        "rationale": "Concise opening.",
+                        "continuity": "Starts the video.",
+                        "narration": "Test line.",
+                        "computer_actions": ["Show state"],
+                        "required_visual_state": "State is visible.",
+                        "timing_mode": "fit",
+                        "maximum_recording_seconds": 2.0,
+                        "video": str(video),
+                        "voiceover": str(voice),
                     }
-                ),
-                encoding="utf-8",
-            )
+                ],
+            }
+            plan.write_text(json.dumps(plan_data), encoding="utf-8")
+            write_passing_shot_evidence(job, plan_data, video, voice, include_audit=False)
             report = qa / "assembly.json"
             command = (
                 "assemble_shot_plan.py",
@@ -985,15 +1552,7 @@ class ShotAssemblyTests(unittest.TestCase):
             self.assertNotEqual(missing.returncode, 0)
             self.assertIn("voiceover audit", " ".join(json.loads(report.read_text())["errors"]))
 
-            (qa / "voiceover_audit.json").write_text(
-                json.dumps(
-                    {
-                        "passed": True,
-                        "shot_plan_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(),
-                    }
-                ),
-                encoding="utf-8",
-            )
+            write_passing_shot_evidence(job, plan_data, video, voice)
             passing = run_script(*command)
             self.assertEqual(passing.returncode, 0, passing.stdout + passing.stderr)
 
@@ -1028,11 +1587,18 @@ class ShotAssemblyTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            project = root / "project.json"
+            project.write_text(
+                json.dumps({"mode": "synthetic", "required_story_roles": ["hook"]}),
+                encoding="utf-8",
+            )
             report = root / "report.json"
             result = run_script(
                 "assemble_shot_plan.py",
                 "--shot-plan",
                 str(plan),
+                "--project",
+                str(project),
                 "--output",
                 str(root / "output.mp4"),
                 "--report",
@@ -1040,7 +1606,7 @@ class ShotAssemblyTests(unittest.TestCase):
                 "--validate-only",
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("recording_review", " ".join(json.loads(report.read_text())["errors"]))
+            self.assertIn("sealed recording review", " ".join(json.loads(report.read_text())["errors"]))
 
     def test_one_shot_assembly(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1084,43 +1650,46 @@ class ShotAssemblyTests(unittest.TestCase):
                 check=True,
             )
             plan = root / "plan.json"
-            plan.write_text(
-                json.dumps(
+            plan_data = {
+                "schema_version": 2,
+                "shots": [
                     {
-                        "shots": [
-                            {
-                                "id": "shot-001",
-                                "story_role": "hook",
-                                "viewer_purpose": "State the result.",
-                                "rationale": "A concise visible opening.",
-                                "continuity": "Opens the synthetic fixture.",
-                                "narration": "Test line.",
-                                "computer_actions": ["Show blue state"],
-                                "required_visual_state": "Blue screen is visible.",
-                                "timing_mode": "fit",
-                                "maximum_recording_seconds": 1.3,
-                                "recording_review": {
-                                    "passed": True,
-                                    "required_visual_state_visible": True,
-                                    "no_private_information": True,
-                                    "cursor_deliberate": True,
-                                    "evidence_times": [0.5],
-                                    "notes": "Synthetic fixture reviewed.",
-                                },
-                                "video": str(video),
-                                "voiceover": str(voice),
-                            }
-                        ]
+                        "id": "shot-001",
+                        "story_role": "hook",
+                        "viewer_purpose": "State the result.",
+                        "rationale": "A concise visible opening.",
+                        "continuity": "Opens the synthetic fixture.",
+                        "narration": "Test line.",
+                        "computer_actions": ["Show blue state"],
+                        "required_visual_state": "Blue screen is visible.",
+                        "timing_mode": "fit",
+                        "maximum_recording_seconds": 1.3,
+                        "video": str(video),
+                        "voiceover": str(voice),
                     }
-                ),
+                ],
+            }
+            plan.write_text(json.dumps(plan_data), encoding="utf-8")
+            project = root / "project.json"
+            project.write_text(
+                json.dumps({"mode": "synthetic", "required_story_roles": ["hook"]}),
                 encoding="utf-8",
             )
+            write_passing_shot_evidence(root, plan_data, video, voice)
             output = root / "assembled.mp4"
             report = root / "assembly.json"
             result = run_script(
                 "assemble_shot_plan.py",
                 "--shot-plan",
                 str(plan),
+                "--project",
+                str(project),
+                "--voice-audit-report",
+                str(root / "qa" / "voiceover_audit.json"),
+                "--recording-review-dir",
+                str(root / "qa" / "reviews" / "recording"),
+                "--voice-review-dir",
+                str(root / "qa" / "reviews" / "voice"),
                 "--output",
                 str(output),
                 "--report",
@@ -1133,6 +1702,80 @@ class ShotAssemblyTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue(output.exists())
             self.assertTrue(json.loads(report.read_text())["passed"])
+
+
+class WindowStoryboardTests(unittest.TestCase):
+    def test_render_binds_exact_frames_and_expected_duration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frames_dir = root / "frames"
+            frames_dir.mkdir()
+            frames = []
+            for index, color in enumerate(("black", "white"), start=1):
+                image = frames_dir / f"{index:04d}.png"
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        f"color=c={color}:s=640x360:d=0.1",
+                        "-frames:v",
+                        "1",
+                        str(image),
+                    ],
+                    check=True,
+                )
+                identity = media_identity(image)
+                identity["path"] = f"frames/{image.name}"
+                frames.append(
+                    {
+                        "index": index,
+                        "image": f"frames/{image.name}",
+                        "hold_seconds": 1.0,
+                        "action": f"Show state {index}",
+                        "visual_state": f"State {index} is clearly visible.",
+                        "media_identity": identity,
+                    }
+                )
+            manifest = root / "capture.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "capture_mode": "state_storyboard",
+                        "frames": frames,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = root / "shot.mp4"
+            report = root / "report.json"
+            result = run_script(
+                "capture_window_storyboard.py",
+                "render",
+                "--manifest",
+                str(manifest),
+                "--output",
+                str(output),
+                "--report",
+                str(report),
+                "--resolution",
+                "640x360",
+                "--fps",
+                "30",
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            rendered = json.loads(report.read_text())
+            self.assertTrue(rendered["passed"])
+            self.assertEqual(rendered["frame_count"], 2)
+            self.assertAlmostEqual(rendered["expected_duration_seconds"], 2.0, places=2)
+            duration = float(rendered["probe"]["format"]["duration"])
+            self.assertAlmostEqual(duration, 2.0, delta=0.08)
 
 
 if __name__ == "__main__":

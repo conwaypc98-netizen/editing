@@ -7,6 +7,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from production_evidence import read_json as read_production_json
+from production_evidence import shot_plan_spec_sha256
+
 
 def run_capture(command: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(command, capture_output=True, text=True)
@@ -46,15 +49,25 @@ def plan_gate(report: dict) -> dict:
         return {"passed": False, "errors": errors}
     raw_path = report.get("plan") or report.get("shot_plan")
     expected_hash = report.get("plan_sha256") or report.get("shot_plan_sha256")
-    if not raw_path or not expected_hash:
+    expected_spec_hash = report.get("shot_plan_spec_sha256")
+    if not raw_path or (not expected_hash and not expected_spec_hash):
         errors.append("Plan report is missing its plan path or SHA-256 identity.")
         return {"passed": False, "errors": errors}
     path = Path(raw_path).expanduser().resolve()
     if not path.is_file():
         errors.append(f"Validated plan no longer exists: {path}")
+    elif expected_spec_hash:
+        if shot_plan_spec_sha256(read_production_json(path)) != expected_spec_hash:
+            errors.append("Validated immutable shot specification changed after its report was created.")
     elif sha256_file(path) != expected_hash:
         errors.append("Validated plan changed after its report was created.")
-    return {"passed": not errors, "errors": errors, "plan": str(path), "plan_sha256": expected_hash}
+    return {
+        "passed": not errors,
+        "errors": errors,
+        "plan": str(path),
+        "plan_sha256": expected_hash,
+        "shot_plan_spec_sha256": expected_spec_hash,
+    }
 
 
 def normalize(value: str) -> str:

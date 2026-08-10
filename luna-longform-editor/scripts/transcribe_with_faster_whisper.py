@@ -3,6 +3,8 @@ import argparse
 import json
 from pathlib import Path
 
+from production_evidence import media_identity
+
 
 def fmt_time(seconds: float) -> str:
     millis = int(round(seconds * 1000))
@@ -31,12 +33,15 @@ def main() -> int:
             "Run the Luna setup script or use the configured transcription virtual environment."
         ) from error
 
+    source = Path(args.audio).expanduser().resolve()
+    if not source.is_file():
+        raise SystemExit(f"Audio/video source not found: {source}")
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     model = WhisperModel(args.model, device="cpu", compute_type="int8")
     segments, info = model.transcribe(
-        args.audio,
+        str(source),
         language=args.language,
         beam_size=5,
         vad_filter=True,
@@ -44,6 +49,7 @@ def main() -> int:
     )
 
     payload = {
+        "source_media_identity": media_identity(source),
         "language": info.language,
         "language_probability": info.language_probability,
         "duration": info.duration,

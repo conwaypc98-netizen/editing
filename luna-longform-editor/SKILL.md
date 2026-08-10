@@ -31,6 +31,8 @@ Read these files before acting:
 - Use word timestamps and waveform valleys for mechanics only after semantic decisions are settled.
 - Review the rendered edit, not merely the source and plan. At least one revise/rerender cycle is required unless the first render passes every gate with direct evidence.
 - Treat unknown review state as not passed. Never claim visual quality from decode success alone.
+- Keep synthetic shot specifications immutable after validation. Recording and voice verdicts belong in sealed sidecars under `qa/reviews/`; never write mutable review state into `shot_plan.json`.
+- Bind every synthetic review to the shot-spec hash and exact media bytes. A changed instruction, crop, recording, or voice file makes the corresponding review stale and requires a new verdict.
 - Preserve the original source and all unrelated project outputs.
 
 ## Choose A Mode
@@ -88,24 +90,47 @@ Use when the user wants Codex to replace manual recording.
    ```
 
 2. Research the exact current software behavior from primary sources when accuracy can drift.
-3. Write `project.json`, then write a shot plan. Each shot must contain purpose, rationale, continuity, narration, computer actions, the required visual result, timing limits, target/include boxes, and an initially unpassed recording-review block.
-4. Review the full narration for Luna wording, claims, order, and CTA before generating audio.
-5. The user must create and verify their own custom voice in the xAI console. Store the resulting ID in `XAI_VOICE_ID` and the API key in `XAI_API_KEY`. Do not scrape or clone a voice from old videos.
-6. Generate one voice file per shot:
+3. Write `project.json`, then write `plans/shot_plan.json`. Each shot must contain purpose, rationale, continuity, narration, exact computer actions, the required visible result, timing limits, and target/include boxes. Do not add inline review blocks. Validate and seal the immutable specification:
+
+   ```bash
+   python3 scripts/validate_shot_plan.py --shot-plan plans/shot_plan.json --project project.json --report qa/shot_plan_validation.json
+   ```
+
+4. Review the full narration for Luna wording, claims, order, and CTA before generating audio. A visual must support every claim; topic text is not proof of a measured result.
+5. The user must create and verify their own custom voice in the xAI console. Store the resulting ID in `XAI_VOICE_ID` and the API key in `XAI_API_KEY`. Do not scrape or create a custom voice from anyone except the consenting owner. An accepted owner recording can be prepared for the console with:
+
+   ```bash
+   python3 scripts/prepare_voice_reference.py --input accepted-video.mp4 --transcript-json transcript.json --output owner-reference.wav --report owner-reference-report.json --owner-consent-confirmed
+   ```
+
+   The prepared reference still requires an actual listening/privacy review before upload.
+
+6. Use the resumable director as the canonical control loop:
+
+   ```bash
+   python3 scripts/production_director.py --job "/path/to/job" --execute-safe
+   ```
+
+   It derives the next state from evidence on disk, runs deterministic safe stages, and stops at the next semantic action: voice ownership/configuration, listening review, Computer Use recording, visual review, or adversarial final review. Complete that action, then run the same command again. Never skip ahead by manually declaring a stage complete.
+
+7. When narration is missing and the verified xAI environment is configured, the director generates one voice file per shot. The equivalent manual command is:
 
    ```bash
    python3 scripts/xai_voiceover.py synthesize-plan --shot-plan plans/shot_plan.json --output-dir voice --owner-consent-confirmed
    ```
 
-   Transcribe each generated shot, run `audit_voiceover.py`, then listen to it. Do not mark the shot's voice-review block passing until the words, product-name pronunciation, cadence, and audio integrity are all correct.
+   The client verifies the selected custom voice before synthesis, retries transient xAI failures, requests WAV output and timestamps, and writes request/media metadata without secrets. Transcribe each generated shot, run `audit_voiceover.py`, then listen to the exact bytes. Seal a voice review only when wording, product-name pronunciation, cadence, identity, emotional delivery, and audio integrity all pass.
 
-7. For each shot:
+8. For each shot:
    - Start `scripts/record_desktop.py`.
    - Use Computer Use to perform only the actions listed in the shot.
    - Continue until the required visual state is clearly visible.
-   - Stop recording, inspect evidence frames, complete the shot's recording-review block, and retake if the cursor hunts, a dialog is obscured, private information appears, or the promised state is not visible.
-8. Assemble shots with `scripts/assemble_shot_plan.py`. A timing mismatch beyond the allowed natural speed range requires a retake or narration rewrite; do not force it.
-9. Apply the generated focus zoom plan, transcribe the finished narration, and use the same fail-closed final verification as Mode A.
+   - Stop recording and inspect the actual captured frames. Accessibility success is not foreground proof; reject a take if the recorder captured Codex or another app.
+   - When Computer Use can operate an app but the full-screen recorder cannot see it, capture the exact clean app state after each consequential action with `capture_window_storyboard.py`, then render those reviewed states to the shot's MP4 path. The state storyboard is a deliberate edited tutorial shot, not permission to omit required steps.
+   - Retake if the cursor hunts, a dialog is obscured, private information appears, the promised state is absent, or the narration claim and visible result disagree.
+9. Seal recording and voice reviews with `seal_production_review.py`. Review sidecars must contain concrete notes and bind the current shot-spec hash, media hash, and evidence frames/audit. Never hand-edit a stale hash into passing state.
+10. Run `production_director.py --execute-safe` again. It assembles only sealed shots, applies the generated focus zooms, transcribes the exact final candidate, builds fail-closed QA templates, and pauses for adversarial frame/gap review.
+11. Complete every timeline and zoom verdict. If the adversarial pass finds a mismatch, repair the script/shot, allow the hashes to invalidate downstream evidence, and resume. Acceptance and cleanup happen only after the rebuilt candidate passes every gate.
 
 Both modes target approximately `-16 LUFS` narration with true peak at or below `-1.5 dBTP`. Do not copy an accidentally quiet historical export as channel style.
 
@@ -156,6 +181,10 @@ After manifest cleanup, the job retains only `delivery/final.mp4`. Never delete 
 - `build_editorial_dossier.py`: combine technical, transcript, duplicate, pacing, and frame evidence.
 - `validate_edit_plan.py`: reject unreasoned, unsafe, discontinuous, or duplicate-preserving plans.
 - `record_desktop.py`: cross-platform desktop shot recording without microphone audio.
+- `capture_window_storyboard.py`: capture exact macOS app states when full-screen recording cannot see the Computer Use target, then render a deterministic MP4 shot.
+- `production_director.py`: resumable evidence-derived state machine for synthetic production.
+- `production_evidence.py`, `validate_shot_plan.py`, `seal_production_review.py`: immutable shot hashes and exact-media review gates.
+- `prepare_voice_reference.py`: consent-gated 90-120 second owner-reference preparation for xAI custom voice setup.
 - `xai_voiceover.py`: consent-gated xAI custom-voice narration, including per-shot generation.
 - `audit_voiceover.py`: reject synthesized shots with missing, changed, or repeated wording before assembly.
 - `assemble_shot_plan.py`: synchronize shot recordings with narration and reject unnatural timing.
