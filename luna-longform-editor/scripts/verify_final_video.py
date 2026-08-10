@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from production_evidence import identity_matches
 from production_evidence import read_json as read_production_json
 from production_evidence import shot_plan_spec_sha256
 
@@ -61,12 +62,48 @@ def plan_gate(report: dict) -> dict:
             errors.append("Validated immutable shot specification changed after its report was created.")
     elif sha256_file(path) != expected_hash:
         errors.append("Validated plan changed after its report was created.")
+    project_path = None
+    raw_project = report.get("project")
+    if raw_project:
+        project_path = Path(raw_project).expanduser().resolve()
+        if not project_path.is_file():
+            errors.append(f"Validated project brief no longer exists: {project_path}")
+        elif not identity_matches(report.get("project_identity"), project_path):
+            errors.append("Validated project brief changed after the plan report was created.")
     return {
         "passed": not errors,
         "errors": errors,
         "plan": str(path),
         "plan_sha256": expected_hash,
         "shot_plan_spec_sha256": expected_spec_hash,
+        "project": str(project_path) if project_path else None,
+    }
+
+
+def creator_fidelity_gate(report: dict, expected_spec_hash: str | None) -> dict:
+    errors = []
+    if report.get("passed") is not True:
+        errors.append("Final creator-fidelity report is missing or not passing.")
+    if report.get("mode") != "final":
+        errors.append("Creator-fidelity report is not a final-render audit.")
+    if expected_spec_hash and report.get("shot_plan_spec_sha256") != expected_spec_hash:
+        errors.append("Creator-fidelity report does not match the assembled shot specification.")
+    for path_field, identity_field, label in (
+        ("project", "project_identity", "project brief"),
+        ("channel_profile", "channel_profile_identity", "channel profile"),
+        ("transcript", "transcript_identity", "final transcript"),
+    ):
+        raw_path = report.get(path_field)
+        path = Path(raw_path).expanduser().resolve() if raw_path else None
+        if path is None or not path.is_file():
+            errors.append(f"Creator-fidelity {label} no longer exists.")
+        elif not identity_matches(report.get(identity_field), path):
+            errors.append(f"Creator-fidelity {label} changed after review.")
+    return {
+        "passed": not errors,
+        "errors": errors,
+        "score": report.get("evidence", {}).get("fingerprint", {}).get("score"),
+        "profile_confidence": report.get("profile_confidence"),
     }
 
 
@@ -406,6 +443,7 @@ def main() -> int:
     parser.add_argument("--transcript-json")
     parser.add_argument("--plan-report")
     parser.add_argument("--zoom-plan")
+    parser.add_argument("--creator-fidelity-report")
     parser.add_argument("--visual-review")
     parser.add_argument("--speech-gap-review")
     parser.add_argument("--max-speech-gap", type=float, default=0.62)
@@ -447,6 +485,23 @@ def main() -> int:
     write_json(gap_template_path, speech.get("gap_review_template", {"gaps": []}))
     plan_report = load_json(Path(args.plan_report).expanduser().resolve()) if args.plan_report else {}
     validated_plan = plan_gate(plan_report)
+    project_path = Path(str(plan_report.get("project", ""))).expanduser()
+    synthetic_plan = False
+    if project_path.is_file():
+        synthetic_plan = str(load_json(project_path).get("mode", "edit")).lower() != "edit"
+    creator_report = (
+        load_json(Path(args.creator_fidelity_report).expanduser().resolve())
+        if args.creator_fidelity_report
+        else {}
+    )
+    if args.creator_fidelity_report or synthetic_plan:
+        creator_fidelity = creator_fidelity_gate(
+            creator_report,
+            plan_report.get("shot_plan_spec_sha256"),
+        )
+        creator_fidelity["required"] = True
+    else:
+        creator_fidelity = {"passed": True, "errors": [], "required": False}
 
     zoom_plan = load_json(Path(args.zoom_plan).expanduser().resolve()) if args.zoom_plan else {"zooms": []}
     visual_template = prepare_visual_evidence(video, zoom_plan, output_dir, duration)
@@ -464,6 +519,7 @@ def main() -> int:
         },
         "audio": audio,
         "plan": validated_plan,
+        "creator_fidelity": creator_fidelity,
         "speech": speech,
         "visual": visuals,
     }

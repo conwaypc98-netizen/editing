@@ -90,13 +90,19 @@ Use when the user wants Codex to replace manual recording.
    ```
 
 2. Research the exact current software behavior from primary sources when accuracy can drift.
-3. Write `project.json`, then write `plans/shot_plan.json`. Each shot must contain purpose, rationale, continuity, narration, exact computer actions, the required visible result, timing limits, and target/include boxes. Do not add inline review blocks. Validate and seal the immutable specification:
+3. Read the job's `channel_profile.json`, then write `project.json` and a schema-version 3 `plans/shot_plan.json`. Each shot must contain purpose, rationale, continuity, narration, exact computer actions, the required visible result, timing limits, target/include boxes, an explicit `claim_support` mapping, capture checkpoints, retake triggers, and a creator-style rationale. Explain how the visible pixels support the spoken claim; repeating the topic on screen is not proof. Do not add inline review blocks. Validate and seal the immutable specification:
 
    ```bash
    python3 scripts/validate_shot_plan.py --shot-plan plans/shot_plan.json --project project.json --report qa/shot_plan_validation.json
    ```
 
-4. Review the full narration for Luna wording, claims, order, and CTA before generating audio. A visual must support every claim; topic text is not proof of a measured result.
+4. Audit the full narration against the creator profile before generating audio. The audit checks story order, duplicate wording, timing feasibility, action/claim alignment, and measured Luna language behavior without requiring copied sentences:
+
+   ```bash
+   python3 scripts/audit_creator_fidelity.py plan --shot-plan plans/shot_plan.json --project project.json --channel-profile channel_profile.json --report qa/creator_fidelity_plan.json
+   ```
+
+   At low confidence, one accepted video supplies guidance and short exemplars only. At three accepted videos, learned ranges may become enforceable. Direct feedback and evidence rules always outrank imitation. Review claims, order, and CTA before generating audio; topic text is not proof of a measured result.
 5. The user must create and verify their own custom voice in the xAI console. Store the resulting ID in `XAI_VOICE_ID` and the API key in `XAI_API_KEY`. Do not scrape or create a custom voice from anyone except the consenting owner. An accepted owner recording can be prepared for the console with:
 
    ```bash
@@ -129,8 +135,8 @@ Use when the user wants Codex to replace manual recording.
    - When Computer Use can operate an app but the full-screen recorder cannot see it, capture the exact clean app state after each consequential action with `capture_window_storyboard.py`, then render those reviewed states to the shot's MP4 path. The state storyboard is a deliberate edited tutorial shot, not permission to omit required steps.
    - Retake if the cursor hunts, a dialog is obscured, private information appears, the promised state is absent, or the narration claim and visible result disagree.
 9. Seal recording and voice reviews with `seal_production_review.py`. Review sidecars must contain concrete notes and bind the current shot-spec hash, media hash, and evidence frames/audit. Never hand-edit a stale hash into passing state.
-10. Run `production_director.py --execute-safe` again. It assembles only sealed shots, applies the generated focus zooms, transcribes the exact final candidate, builds fail-closed QA templates, and pauses for adversarial frame/gap review.
-11. Complete every timeline and zoom verdict. If the adversarial pass finds a mismatch, repair the script/shot, allow the hashes to invalidate downstream evidence, and resume. Acceptance and cleanup happen only after the rebuilt candidate passes every gate.
+10. Run `production_director.py --execute-safe` again. It assembles only sealed shots, applies the generated focus zooms, transcribes the exact final candidate, audits that transcript against the approved script and creator profile, builds fail-closed QA templates, and pauses for adversarial frame/gap review.
+11. Complete every timeline and zoom verdict. If the adversarial pass finds a mismatch or the final creator-fidelity report rejects repeated, changed, generic, or off-pace narration, repair the responsible script/shot, allow the hashes to invalidate downstream evidence, and resume. Acceptance and cleanup happen only after the rebuilt candidate passes every gate.
 
 Both modes target approximately `-16 LUFS` narration with true peak at or below `-1.5 dBTP`. Do not copy an accidentally quiet historical export as channel style.
 
@@ -184,12 +190,13 @@ After manifest cleanup, the job retains only `delivery/final.mp4`. Never delete 
 - `capture_window_storyboard.py`: capture exact macOS app states when full-screen recording cannot see the Computer Use target, then render a deterministic MP4 shot.
 - `production_director.py`: resumable evidence-derived state machine for synthetic production.
 - `production_evidence.py`, `validate_shot_plan.py`, `seal_production_review.py`: immutable shot hashes and exact-media review gates.
+- `creator_fidelity.py`, `audit_creator_fidelity.py`: measurable creator fingerprint plus plan/final likeness and narration/visual-contract gates.
 - `prepare_voice_reference.py`: consent-gated 90-120 second owner-reference preparation for xAI custom voice setup.
 - `xai_voiceover.py`: consent-gated xAI custom-voice narration, including per-shot generation.
 - `audit_voiceover.py`: reject synthesized shots with missing, changed, or repeated wording before assembly.
 - `assemble_shot_plan.py`: synchronize shot recordings with narration and reject unnatural timing.
-- `learn_channel_style.py`: measure pacing, loudness, scene density, intro timing, and compression from accepted videos.
-- `verify_final_video.py`: fail-closed technical, speech, plan, and visual acceptance report.
+- `learn_channel_style.py`: learn portable pacing, language, section, loudness, scene-density, and compression measurements from accepted videos without retaining full transcripts.
+- `verify_final_video.py`: fail-closed technical, speech, creator-fidelity, plan, and visual acceptance report.
 - `tighten_spoken_pacing.py`, `snap_keep_list_to_audio.py`, `render_keep_list.py`: precise cut mechanics after semantic approval.
 - `apply_intro_slate.py`, `apply_focus_zoom.py`: restrained finishing passes.
 - `cleanup_edit_artifacts.py`: job-scoped cleanup.

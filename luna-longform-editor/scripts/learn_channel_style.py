@@ -6,6 +6,9 @@ import statistics
 import subprocess
 from pathlib import Path
 
+from creator_fidelity import SIGNATURE_PHRASES, transcript_style
+from production_evidence import sha256_file
+
 
 def percentile(values: list[float], fraction: float) -> float | None:
     if not values:
@@ -116,6 +119,7 @@ def transcript_metrics(path: Path) -> dict:
         "positive_gap_p95": round(percentile(positive_gaps, 0.95), 3) if positive_gaps else None,
         "intro_end_seconds": intro_end,
         "ending_excerpt": transcript_text[-500:],
+        "creator_style": transcript_style(data),
     }
 
 
@@ -132,6 +136,31 @@ def parse_transcript_map(values: list[str]) -> dict[Path, Path]:
 def median_metric(examples: list[dict], key: str) -> float | None:
     values = [float(example[key]) for example in examples if example.get(key) is not None]
     return round(statistics.median(values), 3) if values else None
+
+
+def nested_median(examples: list[dict], *keys: str) -> float | None:
+    values = []
+    for example in examples:
+        value = example
+        for key in keys:
+            value = value.get(key) if isinstance(value, dict) else None
+        if value is not None:
+            values.append(float(value))
+    return round(statistics.median(values), 4) if values else None
+
+
+def stored_measurements(examples: list[dict]) -> list[dict]:
+    stored = json.loads(json.dumps(examples))
+    for example in stored:
+        example.pop("ending_excerpt", None)
+        style = example.get("creator_style", {})
+        style.pop("opening_excerpt", None)
+        style.pop("closing_excerpt", None)
+        sections = style.get("sections", {})
+        for key in list(sections):
+            if key.endswith("_excerpt"):
+                sections.pop(key, None)
+    return stored
 
 
 def main() -> int:
@@ -158,7 +187,8 @@ def main() -> int:
         duration = float(technical.get("format", {}).get("duration", 0.0))
         cuts = scene_cut_count(video, args.scene_threshold)
         entry = {
-            "video": str(video),
+            "video": video.name,
+            "video_sha256": sha256_file(video),
             "duration_seconds": round(duration, 3),
             "scene_change_count": cuts,
             "scene_changes_per_minute": round(cuts / (duration / 60), 3) if duration else None,
@@ -194,13 +224,38 @@ def main() -> int:
     if any(example.get("positive_gap_p90") is None for example in examples):
         warnings.append("At least one transcript has no reliable positive word-gap sample.")
 
+    phrase_counts = {
+        phrase: sum(
+            int(example.get("creator_style", {}).get("signature_phrase_counts", {}).get(phrase, 0))
+            for example in examples
+        )
+        for phrase in SIGNATURE_PHRASES
+    }
+    observed_phrases = {
+        phrase: count
+        for phrase, count in phrase_counts.items()
+        if count
+    }
+    exemplars = []
+    for example in examples:
+        sections = example.get("creator_style", {}).get("sections", {})
+        exemplars.append(
+            {
+                "video": example["video"],
+                "hook": sections.get("hook_excerpt", ""),
+                "tutorial_transition": sections.get("transition_excerpt", ""),
+                "cta_opening": sections.get("cta_opening_excerpt", ""),
+                "signoff": sections.get("signoff_excerpt", ""),
+            }
+        )
+
     profile.update(
         {
-            "schema_version": max(1, int(profile.get("schema_version", 1))),
+            "schema_version": max(2, int(profile.get("schema_version", 1))),
             "channel": "Luna Tweak",
             "quantitative_confidence": confidence,
             "accepted_tutorial_examples": len(examples),
-            "learned_examples": examples,
+            "learned_examples": stored_measurements(examples),
             "learned_measurements": {
                 "duration_seconds_median": median_metric(examples, "duration_seconds"),
                 "scene_changes_per_minute_median": median_metric(examples, "scene_changes_per_minute"),
@@ -211,6 +266,39 @@ def main() -> int:
                 "observed_integrated_loudness_lufs_median": observed_loudness,
             },
             "measurement_warnings": warnings,
+            "creator_fingerprint": {
+                "confidence": confidence,
+                "policy": (
+                    "At low confidence, exemplars and numeric measurements guide review but do not require copied wording. "
+                    "At medium/high confidence, generated work must remain inside broad learned ranges unless the topic requires a documented exception."
+                ),
+                "linguistic_medians": {
+                    key: nested_median(examples, "creator_style", key)
+                    for key in (
+                        "unique_word_ratio",
+                        "average_unit_words",
+                        "viewer_address_per_100_words",
+                        "first_person_per_100_words",
+                        "action_words_per_100_words",
+                        "transition_words_per_100_words",
+                        "filler_words_per_100_words",
+                        "contractions_per_100_words",
+                        "action_unit_fraction",
+                    )
+                },
+                "section_medians": {
+                    key: nested_median(examples, "creator_style", "sections", key)
+                    for key in (
+                        "tutorial_transition_seconds",
+                        "cta_start_seconds",
+                        "hook_duration_fraction",
+                        "tutorial_duration_fraction",
+                        "cta_duration_fraction",
+                    )
+                },
+                "observed_signature_phrases": observed_phrases,
+                "accepted_exemplars": exemplars,
+            },
             "usage": (
                 "Use learned measurements as ranges, not rigid goals, and only at medium or high confidence. "
                 "Direct feedback, content clarity, visible proof, and delivery guardrails take priority."

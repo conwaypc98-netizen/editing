@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from production_evidence import read_json, validate_shot_plan, write_json
+from production_evidence import media_identity, read_json, validate_shot_plan, write_json
 
 
 def main() -> int:
@@ -22,6 +22,7 @@ def main() -> int:
         "schema_version": 1,
         "shot_plan": str(plan_path),
         "project": str(project_path),
+        "project_identity": media_identity(project_path),
         **validate_shot_plan(read_json(plan_path), read_json(project_path)),
     }
     write_json(report_path, report)

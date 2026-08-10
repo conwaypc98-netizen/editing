@@ -9,7 +9,9 @@ It supports two workflows:
 
 This is deliberately not a silence remover. Every kept range must explain its story role, viewer purpose, take choice, continuity, and evidence. Final visual review is fail-closed: an unreviewed crop or timeline is not considered passing.
 
-Synthetic production is resumable rather than conversationally memorized. `production_director.py` derives the next stage from an immutable shot-plan hash, exact media hashes, sealed recording/voice sidecars, transcripts, and final QA files. Replacing media or changing a shot automatically makes the affected reviews stale.
+Synthetic production is resumable rather than conversationally memorized. `production_director.py` derives the next stage from an immutable shot-plan hash, exact media hashes, sealed recording/voice sidecars, transcripts, creator-fidelity reports, and final QA files. Replacing media, changing a shot, or updating the creator profile automatically makes affected reviews stale.
+
+The bundled creator profile now contains low-confidence measurements from one accepted Luna tutorial: outcome-first hook timing, tutorial/CTA proportions, speech pace, action and transition density, viewer address, scene density, speech gaps, and loudness. It retains only aggregate measurements and short exemplars, not the full transcript. Learned constraints become strict only after enough accepted examples; direct feedback and truthful visible proof remain hard requirements.
 
 ## Windows Install
 
@@ -44,7 +46,7 @@ Use the luna-longform-editor skill on "C:\path\to\video.mov". Create an isolated
 For autonomous recording, use:
 
 ```text
-Use the luna-longform-editor skill in synthetic mode. Build and validate an immutable project/shot plan for this topic: <topic>. Resume it with production_director.py --execute-safe. Use Computer Use to produce each desktop shot, seal exact-media recording and voice reviews, use my verified xAI voice ID from XAI_VOICE_ID, and keep resuming until the rebuilt final passes the adversarial visual, transcript, loudness, decode, plan, and zoom gates. Never infer that a background app was captured; inspect the actual pixels and retake or use the macOS window-state storyboard fallback.
+Use the luna-longform-editor skill in synthetic mode. Build a schema-version 3 project/shot plan for this topic: <topic>, including claim-support mappings, capture checkpoints, retake triggers, and creator-style rationales. Validate it and pass the creator-fidelity plan audit, then resume with production_director.py --execute-safe. Use Computer Use to produce each desktop shot, seal exact-media recording and voice reviews, use my verified xAI voice ID from XAI_VOICE_ID, and keep resuming until the rebuilt final passes the adversarial creator-fidelity, visual, transcript, loudness, decode, plan, and zoom gates. Never infer that a background app was captured; inspect the actual pixels and retake or use the macOS window-state storyboard fallback.
 ```
 
 The one-time voice step is creating and verifying your own custom voice in the xAI console. After that, set `XAI_API_KEY` and `XAI_VOICE_ID`; the workflow verifies the chosen voice, generates per-shot WAV/timestamp metadata, transcribes each result, and still requires a real listening verdict. API keys are never stored in the repo.
@@ -78,6 +80,6 @@ See `PROMPT_FOR_CODEX_ON_WINDOWS.md` for the fuller prompt.
 - `Install-Windows.ps1`: root installer.
 - `README_WINDOWS.md`: Windows setup notes.
 - `PROMPT_FOR_CODEX_ON_WINDOWS.md`: copy/paste editing prompts.
-- `tests/`: regression tests for job isolation, cleanup safety, plan/media integrity, intro evidence, voice consent/audit, style learning, shot review, and final acceptance.
+- `tests/`: regression tests for job isolation, cleanup safety, plan/media integrity, intro evidence, voice consent/audit, creator-fidelity learning, claim contracts, shot review, and final acceptance.
 
 Raw videos, rendered outputs, transcripts, FFmpeg binaries, and Python virtual environments are intentionally not committed.

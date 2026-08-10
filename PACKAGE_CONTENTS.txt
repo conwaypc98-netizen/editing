@@ -16,6 +16,7 @@ Included:
 - luna-longform-editor/scripts/*.sh
 - luna-longform-editor/scripts/*.ps1
 - Resumable production director with immutable shot/media evidence sidecars
+- Confidence-gated creator-twin profile, schema-v3 claim contracts, and plan/final fidelity audits
 - Consent-gated xAI voice-reference preparation, voice verification, retry, timestamps, and per-shot audits
 - Cross-platform desktop recorder plus macOS exact-window state-storyboard capture fallback
 - tests/test_editor_system.py

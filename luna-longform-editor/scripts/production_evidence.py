@@ -30,6 +30,16 @@ VOICE_VERDICTS = (
     "emotional_delivery_match",
 )
 
+CLAIM_TYPES = {
+    "explanation",
+    "hook",
+    "instruction",
+    "measured_result",
+    "observation",
+    "promotion",
+    "transition",
+}
+
 
 def read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -185,7 +195,7 @@ def valid_box(value: object) -> bool:
     return 0.0 <= left < right <= 1.0 and 0.0 <= top < bottom <= 1.0
 
 
-def validate_shot_schema(shot: dict, index: int) -> list[str]:
+def validate_shot_schema(shot: dict, index: int, schema_version: int = 2) -> list[str]:
     errors = []
     shot_id = str(shot.get("id", f"shot-{index:03d}"))
     for field in (
@@ -215,11 +225,36 @@ def validate_shot_schema(shot: dict, index: int) -> list[str]:
     include_boxes = shot.get("include_boxes", [])
     if not isinstance(include_boxes, list) or any(not valid_box(box) for box in include_boxes):
         errors.append(f"{shot_id} include_boxes must contain only normalized boxes.")
+    if schema_version >= 3:
+        claim = shot.get("claim_support")
+        if not isinstance(claim, dict):
+            errors.append(f"{shot_id} must define a claim_support object.")
+        else:
+            claim_type = str(claim.get("type", "")).strip().lower()
+            if claim_type not in CLAIM_TYPES:
+                errors.append(
+                    f"{shot_id} claim_support.type must be one of: "
+                    + ", ".join(sorted(CLAIM_TYPES))
+                )
+            if not str(claim.get("spoken_claim", "")).strip():
+                errors.append(f"{shot_id} claim_support.spoken_claim is required.")
+            if not str(claim.get("visible_evidence", "")).strip():
+                errors.append(f"{shot_id} claim_support.visible_evidence is required.")
+        for field in ("capture_checkpoints", "retake_triggers"):
+            value = shot.get(field)
+            if not isinstance(value, list) or not value or any(not str(item).strip() for item in value):
+                errors.append(f"{shot_id} must list non-empty {field}.")
+        if not str(shot.get("creator_style_rationale", "")).strip():
+            errors.append(f"{shot_id} is missing creator_style_rationale.")
     return errors
 
 
 def validate_shot_plan(plan: dict, project: dict) -> dict:
     shots = plan.get("shots", [])
+    try:
+        schema_version = int(plan.get("schema_version", 2))
+    except (TypeError, ValueError):
+        schema_version = 0
     errors = []
     warnings = []
     if not isinstance(shots, list) or not shots:
@@ -231,7 +266,7 @@ def validate_shot_plan(plan: dict, project: dict) -> dict:
         if not isinstance(shot, dict):
             errors.append(f"shot[{index}] must be an object.")
             continue
-        errors.extend(validate_shot_schema(shot, index))
+        errors.extend(validate_shot_schema(shot, index, schema_version))
         shot_id = str(shot.get("id", "")).strip()
         if shot_id:
             ids.append(shot_id)

@@ -15,8 +15,11 @@ The agent writes a project brief and a shot plan before touching the desktop. Ea
 - The visual state that proves the action succeeded.
 - Any UI regions that must stay visible.
 - A maximum acceptable duration and whether timing may be adjusted.
+- A structured spoken-claim-to-visible-evidence contract.
+- Consequential capture checkpoints and shot-specific retake triggers.
+- A creator-style rationale grounded in the learned profile without copying an old script.
 
-Validate this immutable shot specification before generating media. Do not store recording or voice verdicts in the shot plan. Seal them separately under `qa/reviews/recording/` and `qa/reviews/voice/`, bound to both the current shot-spec hash and exact media bytes.
+Validate this immutable shot specification and run `audit_creator_fidelity.py plan` before generating media. Do not store recording or voice verdicts in the shot plan. Seal them separately under `qa/reviews/recording/` and `qa/reviews/voice/`, bound to both the current shot-spec hash and exact media bytes.
 
 Record shots separately. A failed or confusing shot is retaken; it is not hidden by narration. Generate cloned-voice narration per shot, then assemble only when the shot duration and narration duration are compatible.
 
@@ -37,12 +40,21 @@ The validator must reject plans that lack these fields. "It looked okay" is not 
 ## Evidence Passes
 
 1. Technical pass: streams, duration, resolution, frame rate, loudness, decode health.
-2. Language pass: word timestamps, stutters, false starts, duplicate takes, claims, instructions, proof, CTA.
+2. Language pass: word timestamps, stutters, false starts, duplicate takes, claims, instructions, proof, CTA, and creator-fingerprint evidence.
 3. Visual pass: sampled frames around every spoken block and every candidate cut; identify the active app, action, dialog, result, and edge UI.
 4. Continuity pass: confirm that every instruction has the required preceding state and visible result.
 5. Cut-mechanics pass: snap boundaries to low-energy points, retain complete phonemes, and prevent clicks.
 6. Viewer pass: review the rendered transcript and representative frames as if seeing the video for the first time.
 7. Adversarial pass: try to find one reason the video feels synthetic, confusing, repetitive, clipped, visually lost, or unlike Luna. Fix it and rerun acceptance.
+
+## Creator Twin Rules
+
+- Learn only from finals Colin accepted. Never learn from raw footage, rejected drafts, or a technically passing render that he did not approve.
+- Preserve direct feedback as hard rules. Learned statistics never override clarity, truthful claims, privacy, or visible proof.
+- One accepted tutorial is low-confidence evidence. Use its measurements as review guidance, not a sentence-copying template. Three accepted tutorials permit medium-confidence range checks; eight permit high-confidence checks.
+- Store portable aggregate measurements and short hook/transition/CTA/sign-off exemplars. Do not retain full transcripts in the installed profile.
+- Measure outcome-hook length, tutorial/CTA proportions, WPM, action density, viewer address, transition language, filler rate, contractions, scene density, speech gaps, and loudness.
+- Run the plan audit before voice generation and the final audit against the exact rendered transcript. Changing the profile, plan, or transcript invalidates the corresponding report.
 
 ## Voice Clone Rules
 
@@ -83,6 +95,7 @@ A final video is not accepted unless:
 - It fully decodes and contains expected video and audio streams.
 - Integrated narration loudness is publish-ready and true peak does not clip.
 - The rendered transcript has no unresolved repeated take, clipped sentence, or unexplained awkward speech gap.
+- The exact final transcript matches the approved narration and passes the current creator-fidelity report.
 - Every speech gap above the project threshold is removed or explicitly justified against visible viewer needs.
 - Every instruction still has enough visual context to follow.
 - Every focus crop contains its target and required context.

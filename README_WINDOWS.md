@@ -43,7 +43,7 @@ Use the luna-longform-editor skill to edit "C:\path\to\my raw video.mov". Create
 To have Codex record and narrate the tutorial instead of you:
 
 ```text
-Use the luna-longform-editor skill in synthetic mode for this topic: <topic>. Write and validate the immutable script/shot plan, then keep resuming the job with production_director.py --execute-safe. Record each Windows desktop shot, inspect the actual captured pixels, seal exact-media recording and voice reviews, generate narration with my verified xAI custom voice, and do not accept the final until the adversarial visual, transcript, plan, zoom, loudness, and decode gates all pass.
+Use the luna-longform-editor skill in synthetic mode for this topic: <topic>. Write a schema-version 3 script/shot plan with a spoken-claim-to-visible-evidence contract, capture checkpoints, retake triggers, and creator-style rationale for every shot. Validate it and pass the creator-fidelity plan audit, then keep resuming the job with production_director.py --execute-safe. Record each Windows desktop shot, inspect the actual captured pixels, seal exact-media recording and voice reviews, generate narration with my verified xAI custom voice, and do not accept the final until the adversarial creator-fidelity, visual, transcript, plan, zoom, loudness, and decode gates all pass.
 ```
 
 Create your own custom voice once in the xAI console, then set `XAI_API_KEY` and `XAI_VOICE_ID` in the environment visible to Codex. The script requires explicit owner-consent confirmation and does not clone voices from old videos.
@@ -86,7 +86,7 @@ Resume an autonomous job:
 python .\luna-longform-editor\scripts\production_director.py --job "C:\path\to\job" --execute-safe
 ```
 
-The director runs safe deterministic stages and stops when Codex must inspect/listen/operate/repair something. Complete that evidence-backed action and run the same command again. Reviews are sealed sidecar files; never add passing review flags to `shot_plan.json`.
+The director runs safe deterministic stages and stops when Codex must inspect/listen/operate/repair something. It automatically invalidates creator audits when the script, profile, or exact final transcript changes. Complete the evidence-backed action and run the same command again. Reviews are sealed sidecar files; never add passing review flags to `shot_plan.json`.
 
 List the screen recorder help:
 

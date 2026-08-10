@@ -13,6 +13,7 @@ REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "luna-longform-editor" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from creator_fidelity import transcript_style  # noqa: E402
 from production_evidence import (  # noqa: E402
     media_identity,
     narration_sha256,
@@ -20,14 +21,18 @@ from production_evidence import (  # noqa: E402
     shot_spec_sha256,
     transcript_source_errors,
     validate_sealed_review,
+    validate_shot_plan,
     xai_voice_provenance_errors,
 )
 from production_director import (  # noqa: E402
+    accepted_delivery_is_current,
+    creator_report_is_current,
     derive_status,
     manifest_final_path,
     report_is_fresh,
     transcriber_python,
 )
+from verify_final_video import creator_fidelity_gate  # noqa: E402
 
 
 def run_script(name: str, *args: str) -> subprocess.CompletedProcess:
@@ -108,6 +113,34 @@ def write_passing_shot_evidence(
                         "voiceover_identity": media_identity(voice),
                     }
                 ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_passing_creator_plan_evidence(job: Path, plan_data: dict) -> None:
+    profile = job / "channel_profile.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "channel": "Luna Tweak",
+                "quantitative_confidence": "untrained",
+                "story_and_visuals": {"order": ["hook", "setup", "tutorial", "proof", "cta"]},
+                "learned_measurements": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (job / "qa" / "creator_fidelity_plan.json").write_text(
+        json.dumps(
+            {
+                "mode": "plan",
+                "passed": True,
+                "shot_plan_spec_sha256": shot_plan_spec_sha256(plan_data),
+                "project_identity": media_identity(job / "project.json"),
+                "channel_profile_identity": media_identity(profile),
             }
         ),
         encoding="utf-8",
@@ -238,6 +271,43 @@ class ProductionEvidenceTests(unittest.TestCase):
             errors = transcript_source_errors(transcript, voice, require_identity=True)
             self.assertTrue(any("different source-media bytes" in error for error in errors))
 
+    def test_version_three_plan_requires_claim_and_retake_reasoning(self):
+        shot = {
+            "id": "shot-001",
+            "story_role": "hook",
+            "viewer_purpose": "Promise the tutorial result.",
+            "rationale": "Open directly.",
+            "continuity": "Starts the video.",
+            "narration": "Today I'm showing you how to lower your ping.",
+            "computer_actions": ["Show the network settings result"],
+            "required_visual_state": "The network settings are readable.",
+            "timing_mode": "fit",
+            "maximum_recording_seconds": 5.0,
+            "target_box": None,
+            "include_boxes": [],
+        }
+        plan = {"schema_version": 3, "shots": [shot]}
+        project = {"required_story_roles": ["hook"]}
+        missing = validate_shot_plan(plan, project)
+        self.assertFalse(missing["passed"])
+        self.assertTrue(any("claim_support" in error for error in missing["errors"]))
+        self.assertTrue(any("retake_triggers" in error for error in missing["errors"]))
+
+        shot.update(
+            {
+                "claim_support": {
+                    "type": "hook",
+                    "spoken_claim": "The tutorial will lower ping.",
+                    "visible_evidence": "The network settings supporting the tutorial are visible.",
+                },
+                "capture_checkpoints": ["Network settings are open and readable."],
+                "retake_triggers": ["Retake if the settings are obscured or cropped."],
+                "creator_style_rationale": "Uses Colin's direct outcome-first hook without copying an old line.",
+            }
+        )
+        passing = validate_shot_plan(plan, project)
+        self.assertTrue(passing["passed"], passing["errors"])
+
     def test_recording_review_seals_extracted_frame_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -311,6 +381,22 @@ class ProductionEvidenceTests(unittest.TestCase):
 
 
 class ProductionDirectorTests(unittest.TestCase):
+    def test_accepted_delivery_must_equal_the_current_qa_candidate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            accepted = root / "delivery.mp4"
+            candidate = root / "candidate.mp4"
+            accepted.write_bytes(b"accepted bytes")
+            candidate.write_bytes(b"new candidate bytes")
+            manifest = {
+                "status": "accepted",
+                "final_output": str(accepted),
+                "final_identity": media_identity(accepted),
+            }
+            self.assertFalse(accepted_delivery_is_current(manifest, candidate))
+            candidate.write_bytes(accepted.read_bytes())
+            self.assertTrue(accepted_delivery_is_current(manifest, candidate))
+
     def test_fresh_manifest_has_no_accepted_output_path(self):
         self.assertIsNone(manifest_final_path({"final_output": None}))
         self.assertIsNone(manifest_final_path({"final_output": ""}))
@@ -331,6 +417,34 @@ class ProductionDirectorTests(unittest.TestCase):
 
             os.utime(review, ns=(review_time, review_time))
             self.assertFalse(report_is_fresh(report, [candidate, review]))
+
+    def test_project_change_invalidates_creator_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project.json"
+            profile = root / "profile.json"
+            report = root / "creator.json"
+            project.write_text('{"target":180}', encoding="utf-8")
+            profile.write_text('{"channel":"Luna Tweak"}', encoding="utf-8")
+            plan = {"schema_version": 2, "shots": []}
+            report.write_text(
+                json.dumps(
+                    {
+                        "mode": "plan",
+                        "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
+                        "project_identity": media_identity(project),
+                        "channel_profile_identity": media_identity(profile),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertTrue(
+                creator_report_is_current(report, "plan", plan, project, profile)
+            )
+            project.write_text('{"target":300}', encoding="utf-8")
+            self.assertFalse(
+                creator_report_is_current(report, "plan", plan, project, profile)
+            )
 
     def test_transcriber_keeps_virtual_environment_launcher_path(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -452,10 +566,12 @@ class ProductionDirectorTests(unittest.TestCase):
                     {
                         "passed": True,
                         "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
+                        "project_identity": media_identity(job / "project.json"),
                     }
                 ),
                 encoding="utf-8",
             )
+            write_passing_creator_plan_evidence(job, plan)
             with patch.dict("os.environ", {}, clear=True):
                 status = derive_status(job)
             self.assertEqual(status["next"]["action"], "configure_verified_xai_voice")
@@ -498,10 +614,12 @@ class ProductionDirectorTests(unittest.TestCase):
                     {
                         "passed": True,
                         "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
+                        "project_identity": media_identity(job / "project.json"),
                     }
                 ),
                 encoding="utf-8",
             )
+            write_passing_creator_plan_evidence(job, plan)
             voice = job / "voice" / "shot-001.wav"
             voice.write_bytes(b"first voice bytes")
             transcript = job / "voice" / "transcripts" / "shot-001" / "transcript.json"
@@ -583,6 +701,201 @@ class VoiceReferenceTests(unittest.TestCase):
             self.assertGreaterEqual(payload["output_duration_seconds"], 89.9)
             self.assertLessEqual(payload["output_duration_seconds"], 90.1)
             self.assertTrue(payload["manual_listening_review_required"])
+
+
+class CreatorFidelityTests(unittest.TestCase):
+    def test_final_creator_gate_is_bound_to_exact_profile_and_transcript(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project.json"
+            profile = root / "profile.json"
+            transcript = root / "transcript.json"
+            project.write_text('{"mode":"synthetic"}', encoding="utf-8")
+            profile.write_text('{"channel":"Luna Tweak"}', encoding="utf-8")
+            transcript.write_text('{"segments":[]}', encoding="utf-8")
+            report = {
+                "mode": "final",
+                "passed": True,
+                "shot_plan_spec_sha256": "plan-hash",
+                "project": str(project),
+                "project_identity": media_identity(project),
+                "channel_profile": str(profile),
+                "channel_profile_identity": media_identity(profile),
+                "transcript": str(transcript),
+                "transcript_identity": media_identity(transcript),
+                "profile_confidence": "low",
+                "evidence": {"fingerprint": {"score": 0.9}},
+            }
+            self.assertTrue(creator_fidelity_gate(report, "plan-hash")["passed"])
+            transcript.write_text('{"segments":[{"text":"changed"}]}', encoding="utf-8")
+            rejected = creator_fidelity_gate(report, "plan-hash")
+            self.assertFalse(rejected["passed"])
+            self.assertTrue(any("changed after review" in error for error in rejected["errors"]))
+
+    def test_mid_tutorial_download_link_is_not_mistaken_for_the_cta(self):
+        payload = {
+            "duration": 100.0,
+            "segments": [
+                {"start": 0.0, "end": 4.0, "text": "Today I'm showing you the fix."},
+                {"start": 4.0, "end": 8.0, "text": "All right guys, to start the tutorial open settings."},
+                {"start": 40.0, "end": 45.0, "text": "Download it from the link in the description."},
+                {"start": 88.0, "end": 93.0, "text": "If this video helped you, check out the full optimization."},
+                {"start": 93.0, "end": 100.0, "text": "Thank you guys for watching."},
+            ],
+        }
+        sections = transcript_style(payload)["sections"]
+        self.assertEqual(sections["cta_start_seconds"], 88.0)
+        self.assertGreater(sections["tutorial_duration_fraction"], 0.75)
+
+    def test_plan_and_final_fidelity_audits_reject_repeated_or_changed_narration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = root / "channel_profile.json"
+            profile.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "quantitative_confidence": "low",
+                        "story_and_visuals": {
+                            "order": ["hook", "setup", "tutorial", "proof", "cta"]
+                        },
+                        "learned_measurements": {"words_per_minute_median": 220.0},
+                        "creator_fingerprint": {
+                            "confidence": "low",
+                            "linguistic_medians": {
+                                "viewer_address_per_100_words": 8.0,
+                                "action_words_per_100_words": 12.0,
+                                "transition_words_per_100_words": 5.0,
+                            },
+                            "accepted_exemplars": [
+                                {"hook": "Today I'm showing you how to lower your ping."}
+                            ],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            project = root / "project.json"
+            project.write_text(
+                json.dumps(
+                    {
+                        "mode": "synthetic",
+                        "target_duration_seconds": {"minimum": 10, "maximum": 60},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def shot(shot_id: str, role: str, narration: str, claim_type: str) -> dict:
+                return {
+                    "id": shot_id,
+                    "story_role": role,
+                    "viewer_purpose": f"Deliver the {role}.",
+                    "rationale": "Keep the tutorial direct.",
+                    "continuity": "Follows the previous step.",
+                    "narration": narration,
+                    "computer_actions": ["Open the network setting and show the result"],
+                    "required_visual_state": "The network setting and result are visible.",
+                    "claim_support": {
+                        "type": claim_type,
+                        "spoken_claim": narration,
+                        "visible_evidence": "The network setting and result are visible.",
+                    },
+                    "capture_checkpoints": ["The required setting is centered and readable."],
+                    "retake_triggers": ["Retake if the setting or result is cropped."],
+                    "creator_style_rationale": "Uses direct second-person Luna tutorial wording.",
+                    "timing_mode": "fit",
+                    "maximum_recording_seconds": 12.0,
+                    "target_box": None,
+                    "include_boxes": [],
+                }
+
+            plan_data = {
+                "schema_version": 3,
+                "title": "Fidelity fixture",
+                "story": "A direct network tutorial.",
+                "shots": [
+                    shot(
+                        "shot-001",
+                        "hook",
+                        "Today I'm showing you how to lower your ping. Let's get into it.",
+                        "hook",
+                    ),
+                    shot(
+                        "shot-002",
+                        "tutorial",
+                        "All right guys, open the network settings, then click advanced and make sure the option is disabled.",
+                        "instruction",
+                    ),
+                    shot(
+                        "shot-003",
+                        "cta",
+                        "If this video helped, check the link in the description. Thank you guys for watching.",
+                        "promotion",
+                    ),
+                ],
+            }
+            plan = root / "shot_plan.json"
+            plan.write_text(json.dumps(plan_data), encoding="utf-8")
+            plan_report = root / "plan_fidelity.json"
+            passing_plan = run_script(
+                "audit_creator_fidelity.py",
+                "plan",
+                "--shot-plan",
+                str(plan),
+                "--project",
+                str(project),
+                "--channel-profile",
+                str(profile),
+                "--report",
+                str(plan_report),
+            )
+            self.assertEqual(passing_plan.returncode, 0, passing_plan.stdout + passing_plan.stderr)
+
+            combined = " ".join(item["narration"] for item in plan_data["shots"])
+            transcript = root / "transcript.json"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "duration": 16.0,
+                        "segments": [{"start": 0.0, "end": 16.0, "text": combined}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            final_report = root / "final_fidelity.json"
+            passing_final = run_script(
+                "audit_creator_fidelity.py",
+                "final",
+                "--shot-plan",
+                str(plan),
+                "--project",
+                str(project),
+                "--channel-profile",
+                str(profile),
+                "--transcript-json",
+                str(transcript),
+                "--report",
+                str(final_report),
+            )
+            self.assertEqual(passing_final.returncode, 0, passing_final.stdout + passing_final.stderr)
+
+            plan_data["shots"][2]["narration"] = plan_data["shots"][1]["narration"]
+            plan.write_text(json.dumps(plan_data), encoding="utf-8")
+            failed_plan = run_script(
+                "audit_creator_fidelity.py",
+                "plan",
+                "--shot-plan",
+                str(plan),
+                "--project",
+                str(project),
+                "--channel-profile",
+                str(profile),
+                "--report",
+                str(plan_report),
+            )
+            self.assertNotEqual(failed_plan.returncode, 0)
+            self.assertTrue(json.loads(plan_report.read_text())["evidence"]["style_metrics"]["duplicate_units"])
 
 
 class CleanupTests(unittest.TestCase):
@@ -1497,6 +1810,10 @@ class StyleLearningTests(unittest.TestCase):
             self.assertEqual(profile["quantitative_confidence"], "low")
             self.assertEqual(profile["accepted_tutorial_examples"], 1)
             self.assertGreater(profile["learned_measurements"]["positive_speech_gap_p90_median"], 0)
+            self.assertEqual(profile["schema_version"], 2)
+            self.assertIn("creator_fingerprint", profile)
+            self.assertEqual(profile["learned_examples"][0]["video"], video.name)
+            self.assertNotIn("opening_excerpt", profile["learned_examples"][0]["creator_style"])
 
 
 class ShotAssemblyTests(unittest.TestCase):

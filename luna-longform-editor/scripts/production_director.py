@@ -73,6 +73,23 @@ def manifest_final_path(manifest: dict) -> Path | None:
     return Path(value).expanduser()
 
 
+def accepted_delivery_is_current(manifest: dict, candidate: Path) -> bool:
+    accepted_path = manifest_final_path(manifest)
+    if (
+        manifest.get("status") != "accepted"
+        or accepted_path is None
+        or not accepted_path.is_file()
+        or not candidate.is_file()
+    ):
+        return False
+    accepted_sha = manifest.get("final_identity", {}).get("sha256")
+    return (
+        bool(accepted_sha)
+        and accepted_sha == media_identity(accepted_path)["sha256"]
+        and accepted_sha == media_identity(candidate)["sha256"]
+    )
+
+
 def command_action(action: str, reason: str, command: list[str], **extra) -> dict:
     return {
         "action": action,
@@ -101,11 +118,41 @@ def voice_transcript(job: Path, shot_id: str) -> Path | None:
     return next((path for path in candidates if path.is_file()), None)
 
 
-def report_matches_plan(report_path: Path, plan: dict) -> bool:
+def report_matches_plan(report_path: Path, plan: dict, project_path: Path) -> bool:
     if not report_path.is_file():
         return False
     report = read_json(report_path)
-    return report.get("passed") is True and report.get("shot_plan_spec_sha256") == shot_plan_spec_sha256(plan)
+    return (
+        report.get("passed") is True
+        and report.get("shot_plan_spec_sha256") == shot_plan_spec_sha256(plan)
+        and identity_matches(report.get("project_identity"), project_path)
+    )
+
+
+def creator_report_is_current(
+    report_path: Path,
+    mode: str,
+    plan: dict,
+    project_path: Path,
+    profile_path: Path,
+    transcript_path: Path | None = None,
+) -> bool:
+    if not report_path.is_file() or not profile_path.is_file():
+        return False
+    report = read_json(report_path)
+    if report.get("mode") != mode:
+        return False
+    if report.get("shot_plan_spec_sha256") != shot_plan_spec_sha256(plan):
+        return False
+    if not identity_matches(report.get("project_identity"), project_path):
+        return False
+    if not identity_matches(report.get("channel_profile_identity"), profile_path):
+        return False
+    if transcript_path is not None and not identity_matches(
+        report.get("transcript_identity"), transcript_path
+    ):
+        return False
+    return True
 
 
 def derive_status(job: Path) -> dict:
@@ -135,7 +182,7 @@ def derive_status(job: Path) -> dict:
             project=str(project_path),
         )
         return result
-    if not report_matches_plan(plan_report, plan):
+    if not report_matches_plan(plan_report, plan, project_path):
         result["stage"] = "planning"
         result["next"] = command_action(
             "validate_shot_plan",
@@ -150,6 +197,56 @@ def derive_status(job: Path) -> dict:
                 "--report",
                 str(plan_report),
             ],
+        )
+        return result
+
+    profile_path = job / "channel_profile.json"
+    creator_plan_report = job / "qa" / "creator_fidelity_plan.json"
+    if not profile_path.is_file():
+        result["stage"] = "creator_fidelity"
+        result["next"] = agent_action(
+            "restore_channel_profile",
+            "The job has no creator profile, so Luna likeness cannot be evaluated.",
+            expected_path=str(profile_path),
+        )
+        return result
+    if not creator_report_is_current(
+        creator_plan_report,
+        "plan",
+        plan,
+        project_path,
+        profile_path,
+    ):
+        result["stage"] = "creator_fidelity"
+        result["next"] = command_action(
+            "audit_creator_fidelity_plan",
+            "The current script and shot plan have no current creator-fidelity audit.",
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "audit_creator_fidelity.py"),
+                "plan",
+                "--shot-plan",
+                str(plan_path),
+                "--project",
+                str(project_path),
+                "--channel-profile",
+                str(profile_path),
+                "--report",
+                str(creator_plan_report),
+            ],
+            acceptable_return_codes=[0, 1],
+        )
+        return result
+    creator_plan = read_json(creator_plan_report)
+    if creator_plan.get("passed") is not True:
+        result["stage"] = "creator_fidelity"
+        result["next"] = agent_action(
+            "rewrite_plan_for_creator_fidelity",
+            "The current script violates the creator-fidelity or narration/visual-contract gates.",
+            errors=creator_plan.get("errors", []),
+            warnings=creator_plan.get("warnings", []),
+            report=str(creator_plan_report),
+            shot_plan=str(plan_path),
         )
         return result
 
@@ -508,6 +605,7 @@ def derive_status(job: Path) -> dict:
         assembly_current = (
             report.get("passed") is True
             and report.get("shot_plan_spec_sha256") == validation["shot_plan_spec_sha256"]
+            and identity_matches(report.get("project_identity"), project_path)
             and identity_matches(report.get("output_identity"), assembled)
         )
     zoom_plan = job / "plans" / "generated_focus_zoom.json"
@@ -586,12 +684,61 @@ def derive_status(job: Path) -> dict:
         return result
 
     qa_dir = job / "qa" / "final"
+    creator_final_report = qa_dir / "creator_fidelity.json"
+    if not creator_report_is_current(
+        creator_final_report,
+        "final",
+        plan,
+        project_path,
+        profile_path,
+        final_transcript,
+    ):
+        result["stage"] = "creator_fidelity"
+        result["next"] = command_action(
+            "audit_final_creator_fidelity",
+            "The exact final transcript has no current creator-fidelity verdict.",
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "audit_creator_fidelity.py"),
+                "final",
+                "--shot-plan",
+                str(plan_path),
+                "--project",
+                str(project_path),
+                "--channel-profile",
+                str(profile_path),
+                "--transcript-json",
+                str(final_transcript),
+                "--report",
+                str(creator_final_report),
+            ],
+            acceptable_return_codes=[0, 1],
+        )
+        return result
+    creator_final = read_json(creator_final_report)
+    if creator_final.get("passed") is not True:
+        result["stage"] = "creator_fidelity"
+        result["next"] = agent_action(
+            "repair_final_creator_fidelity",
+            "The exact final narration does not yet match the approved script and creator profile.",
+            errors=creator_final.get("errors", []),
+            warnings=creator_final.get("warnings", []),
+            report=str(creator_final_report),
+        )
+        return result
+
     qa_report = qa_dir / "final_qa_report.json"
     completed_visual = qa_dir / "visual_review_completed.json"
     completed_gaps = qa_dir / "speech_gap_review_completed.json"
     qa = read_json(qa_report) if qa_report.is_file() else {}
     candidate_identity = media_identity(final_candidate)
-    qa_inputs = [final_candidate, final_transcript, assembly_report, zoom_plan]
+    qa_inputs = [
+        final_candidate,
+        final_transcript,
+        assembly_report,
+        zoom_plan,
+        creator_final_report,
+    ]
     qa_inputs.extend(path for path in (completed_visual, completed_gaps) if path.is_file())
     qa_current = (
         qa.get("input") == str(final_candidate)
@@ -612,6 +759,8 @@ def derive_status(job: Path) -> dict:
         str(assembly_report),
         "--zoom-plan",
         str(zoom_plan),
+        "--creator-fidelity-report",
+        str(creator_final_report),
     ]
     if completed_visual.is_file():
         verify_command.extend(["--visual-review", str(completed_visual)])
@@ -649,12 +798,7 @@ def derive_status(job: Path) -> dict:
 
     manifest = read_json(job / ".luna-job.json")
     accepted_path = manifest_final_path(manifest)
-    accepted_current = (
-        manifest.get("status") == "accepted"
-        and accepted_path is not None
-        and accepted_path.is_file()
-        and manifest.get("final_identity", {}).get("sha256") == media_identity(accepted_path)["sha256"]
-    )
+    accepted_current = accepted_delivery_is_current(manifest, final_candidate)
     if not accepted_current:
         result["stage"] = "acceptance"
         result["next"] = command_action(

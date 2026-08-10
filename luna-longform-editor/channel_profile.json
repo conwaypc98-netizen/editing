@@ -1,9 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "channel": "Luna Tweak",
   "behavioral_confidence": "high",
-  "quantitative_confidence": "untrained",
-  "accepted_tutorial_examples": 0,
+  "quantitative_confidence": "low",
+  "accepted_tutorial_examples": 1,
   "voice_and_pacing": {
     "delivery": "Direct, conversational, fluent, and fast without sounding stitched together.",
     "intro": "The hook and lists are the tightest part of the video.",
@@ -12,7 +12,13 @@
     "held_word_policy": "Treat stretched short words as hidden hesitation even when the transcript text is correct."
   },
   "story_and_visuals": {
-    "order": ["hook", "setup", "tutorial", "proof", "cta"],
+    "order": [
+      "hook",
+      "setup",
+      "tutorial",
+      "proof",
+      "cta"
+    ],
     "reference_watching": "Remove unless essential to the viewer's understanding.",
     "intro_visual": "Use the Luna background only while the spoken hook or setup does not require screen evidence.",
     "focus_zoom": "Use sparse modest zooms on the viewer's current action and retain edge UI and required context.",
@@ -27,12 +33,132 @@
     "minimum_zoom_hold_seconds": 3.0
   },
   "learned_measurements": {
-    "duration_seconds_median": null,
-    "scene_changes_per_minute_median": null,
-    "words_per_minute_median": null,
-    "positive_speech_gap_p90_median": null,
-    "intro_end_seconds_median": null,
-    "raw_to_final_duration_ratio_median": null
+    "duration_seconds_median": 123.4,
+    "scene_changes_per_minute_median": 5.835,
+    "words_per_minute_median": 245.69,
+    "positive_speech_gap_p90_median": 0.64,
+    "intro_end_seconds_median": 4.22,
+    "raw_to_final_duration_ratio_median": 0.175,
+    "observed_integrated_loudness_lufs_median": -16.1
   },
-  "learning_policy": "Only add a tutorial to quantitative learning after Colin accepts the final. Three examples allow medium confidence; eight allow high confidence. Keep quality guardrails separate from observed style so a weak technical measurement is not copied as a preference."
+  "learning_policy": "Only add a tutorial to quantitative learning after Colin accepts the final. Three examples allow medium confidence; eight allow high confidence. Keep quality guardrails separate from observed style so a weak technical measurement is not copied as a preference.",
+  "learned_examples": [
+    {
+      "video": "network_opti_new_final.mp4",
+      "video_sha256": "acdae7653015f33c1c1d7633cdc8ae59f9788ca8d751f26da4e59ffe8b1f208f",
+      "duration_seconds": 123.4,
+      "scene_change_count": 12,
+      "scene_changes_per_minute": 5.835,
+      "integrated_loudness_lufs": -16.1,
+      "technical": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_type": "video",
+            "width": 2560,
+            "height": 1440,
+            "r_frame_rate": "60/1"
+          },
+          {
+            "codec_type": "audio",
+            "r_frame_rate": "0/0"
+          }
+        ],
+        "format": {
+          "duration": "123.400000",
+          "size": "15289598",
+          "bit_rate": "991221"
+        }
+      },
+      "word_count": 505,
+      "words_per_minute": 245.69,
+      "positive_gap_median": 0.42,
+      "positive_gap_p90": 0.64,
+      "positive_gap_p95": 0.64,
+      "intro_end_seconds": 4.22,
+      "creator_style": {
+        "word_count": 504,
+        "words_per_minute": 245.2,
+        "unique_word_ratio": 0.4226,
+        "average_unit_words": 14.824,
+        "median_unit_words": 15.5,
+        "viewer_address_per_100_words": 7.341,
+        "first_person_per_100_words": 1.389,
+        "action_words_per_100_words": 11.111,
+        "transition_words_per_100_words": 6.746,
+        "filler_words_per_100_words": 0.0,
+        "contractions_per_100_words": 3.373,
+        "action_unit_fraction": 0.8235,
+        "signature_phrase_counts": {
+          "all right guys": 1,
+          "today i'm showing you": 1,
+          "let's get into it": 1,
+          "you want to": 8,
+          "make sure": 7,
+          "just so you guys know": 1,
+          "once you've done that": 1,
+          "if this video helped": 1,
+          "link in the description": 1,
+          "thank you guys for watching": 1,
+          "hope you have a great day": 1
+        },
+        "adjacent_repeated_phrases": [],
+        "duplicate_units": [],
+        "sections": {
+          "tutorial_transition_seconds": 4.22,
+          "cta_start_seconds": 108.88,
+          "hook_duration_fraction": 0.0342,
+          "tutorial_duration_fraction": 0.8486,
+          "cta_duration_fraction": 0.1172
+        }
+      }
+    }
+  ],
+  "measurement_warnings": [],
+  "creator_fingerprint": {
+    "confidence": "low",
+    "policy": "At low confidence, exemplars and numeric measurements guide review but do not require copied wording. At medium/high confidence, generated work must remain inside broad learned ranges unless the topic requires a documented exception.",
+    "linguistic_medians": {
+      "unique_word_ratio": 0.4226,
+      "average_unit_words": 14.824,
+      "viewer_address_per_100_words": 7.341,
+      "first_person_per_100_words": 1.389,
+      "action_words_per_100_words": 11.111,
+      "transition_words_per_100_words": 6.746,
+      "filler_words_per_100_words": 0.0,
+      "contractions_per_100_words": 3.373,
+      "action_unit_fraction": 0.8235
+    },
+    "section_medians": {
+      "tutorial_transition_seconds": 4.22,
+      "cta_start_seconds": 108.88,
+      "hook_duration_fraction": 0.0342,
+      "tutorial_duration_fraction": 0.8486,
+      "cta_duration_fraction": 0.1172
+    },
+    "observed_signature_phrases": {
+      "all right guys": 1,
+      "today i'm showing you": 1,
+      "let's get into it": 1,
+      "you want to": 8,
+      "make sure": 7,
+      "just so you guys know": 1,
+      "once you've done that": 1,
+      "if this video helped": 1,
+      "link in the description": 1,
+      "thank you guys for watching": 1,
+      "hope you have a great day": 1
+    },
+    "accepted_exemplars": [
+      {
+        "video": "network_opti_new_final.mp4",
+        "hook": "Today i'm showing you how to lower your ping and decrease packet loss in fortnite chapter seven",
+        "tutorial_transition": "Let's get into it. All right guys to start the tutorial you want to be on your desktop",
+        "cta_opening": "If this video helped you at all",
+        "signoff": "Thank you guys for watching. I hope you have a great day"
+      }
+    ]
+  },
+  "usage": "Use learned measurements as ranges, not rigid goals, and only at medium or high confidence. Direct feedback, content clarity, visible proof, and delivery guardrails take priority."
 }

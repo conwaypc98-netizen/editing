@@ -251,6 +251,7 @@ def main() -> int:
         "shot_plan": str(plan_path),
         "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
         "project": str(project_path) if project else None,
+        "project_identity": media_identity(project_path) if project else None,
         "voice_audit_report": str(voice_audit_path) if voice_audit else None,
         "recording_review_dir": str(recording_review_dir),
         "voice_review_dir": str(voice_review_dir),
