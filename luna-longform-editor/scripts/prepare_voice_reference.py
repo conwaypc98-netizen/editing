@@ -6,7 +6,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from production_evidence import media_identity, probe_duration, read_json, write_json
+from production_evidence import (
+    media_identity,
+    probe_duration,
+    read_json,
+    transcript_source_errors,
+    write_json,
+)
 
 
 def transcript_words(path: Path | None) -> tuple[list[dict], list[dict]]:
@@ -169,6 +175,13 @@ def main() -> int:
         raise SystemExit(f"Input not found: {source}")
     if transcript is not None and not transcript.is_file():
         raise SystemExit(f"Transcript not found: {transcript}")
+    if transcript is not None:
+        provenance_errors = transcript_source_errors(transcript, source, require_identity=True)
+        if provenance_errors:
+            raise SystemExit(
+                "Voice-reference selection transcript is stale or unbound: "
+                + " ".join(provenance_errors)
+            )
     if not 90.0 <= args.minimum_seconds <= args.maximum_seconds <= 120.0:
         raise SystemExit("Reference duration limits must stay within xAI's 90-120 second quality target.")
     target = min(args.target_seconds, args.maximum_seconds)
@@ -202,7 +215,7 @@ def main() -> int:
             "-ac",
             "1",
             "-ar",
-            "48000",
+            "24000",
             "-c:a",
             "pcm_s16le",
             str(output),
@@ -210,21 +223,31 @@ def main() -> int:
         check=True,
     )
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "provider_target": "xai_custom_voice",
         "owner_consent_confirmed": True,
         "source_identity": media_identity(source),
         "transcript": str(transcript) if transcript else None,
+        "source_transcript_identity": media_identity(transcript) if transcript else None,
         "selection": selection,
         "output_identity": media_identity(output),
         "output_duration_seconds": round(probe_duration(output), 3),
+        "output_audio_profile": {
+            "container": "wav",
+            "codec": "pcm_s16le",
+            "sample_rate_hz": 24000,
+            "channels": 1,
+        },
         "audio": loudness(output),
         "manual_listening_review_required": True,
+        "upload_ready": False,
         "review_requirements": [
             "Only Colin speaks.",
             "No music, notification sounds, or other background audio is audible.",
             "Delivery is natural and representative of Luna tutorials.",
             "No clipped words or abrupt edit artifacts are audible.",
+            "No private spoken information is present.",
+            "Transcribe the exact prepared WAV and seal an exact-byte review before upload.",
         ],
     }
     write_json(report_path, report)

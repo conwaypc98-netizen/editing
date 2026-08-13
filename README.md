@@ -57,7 +57,7 @@ An owner-consented reference from an accepted video can be prepared locally with
 python3 luna-longform-editor/scripts/prepare_voice_reference.py --input accepted-video.mp4 --transcript-json transcript.json --output owner-reference.wav --report owner-reference-report.json --owner-consent-confirmed
 ```
 
-Listen to that reference and check it for music, other speakers, private audio, and clipped boundaries before uploading it.
+Transcribe the exact prepared WAV, listen to it from beginning to end, and run `seal_voice_reference_review.py seal` followed by `verify`. Upload only when the exact-byte review reports `upload_ready: true`; the seal rejects stale preparation/transcript/audio evidence and requires explicit verdicts for owner identity, background audio, privacy, representative delivery, clipped words, and edit artifacts.
 
 For an existing synthetic job, the canonical resume command is:
 

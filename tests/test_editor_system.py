@@ -896,6 +896,190 @@ class VoiceReferenceTests(unittest.TestCase):
             self.assertGreaterEqual(payload["output_duration_seconds"], 89.9)
             self.assertLessEqual(payload["output_duration_seconds"], 90.1)
             self.assertTrue(payload["manual_listening_review_required"])
+            self.assertFalse(payload["upload_ready"])
+            sample_rate = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "a:0",
+                    "-show_entries",
+                    "stream=sample_rate",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(output),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(sample_rate.stdout.strip(), "24000")
+
+    def test_reference_preparation_rejects_stale_selection_transcript(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "accepted.wav"
+            source.write_bytes(b"accepted source identity")
+            other = root / "other.wav"
+            other.write_bytes(b"different source identity")
+            transcript = root / "transcript.json"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "source_media_identity": media_identity(other),
+                        "segments": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = run_script(
+                "prepare_voice_reference.py",
+                "--input",
+                str(source),
+                "--transcript-json",
+                str(transcript),
+                "--output",
+                str(root / "reference.wav"),
+                "--report",
+                str(root / "report.json"),
+                "--owner-consent-confirmed",
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("stale or unbound", result.stderr)
+
+    def test_voice_reference_review_seals_and_rejects_changed_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference = root / "reference.wav"
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=90",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "24000",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(reference),
+                ],
+                check=True,
+            )
+            preparation = root / "preparation.json"
+            preparation.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "provider_target": "xai_custom_voice",
+                        "owner_consent_confirmed": True,
+                        "source_identity": media_identity(reference),
+                        "source_transcript_identity": media_identity(reference),
+                        "output_identity": media_identity(reference),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            transcript = root / "transcript.json"
+            words = [
+                {
+                    "start": round(index * 0.3, 3),
+                    "end": round(index * 0.3 + 0.24, 3),
+                    "word": f" word{index}",
+                    "probability": 0.95,
+                }
+                for index in range(300)
+            ]
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "source_media_identity": media_identity(reference),
+                        "duration": 90.0,
+                        "segments": [
+                            {
+                                "start": 0.0,
+                                "end": 89.94,
+                                "text": " ".join(f"word{index}" for index in range(300)),
+                                "words": words,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            review = root / "review.json"
+            seal = run_script(
+                "seal_voice_reference_review.py",
+                "seal",
+                "--reference",
+                str(reference),
+                "--preparation-report",
+                str(preparation),
+                "--transcript-json",
+                str(transcript),
+                "--only-owner-speaks",
+                "--no-background-audio",
+                "--no-private-audio",
+                "--representative-tutorial-delivery",
+                "--no-clipped-words",
+                "--no-edit-artifacts",
+                "--reviewer-kind",
+                "human",
+                "--reviewer-name",
+                "Fixture Reviewer",
+                "--listened-from-start-to-finish",
+                "--notes",
+                "Owner voice is clean, natural, private, and artifact free.",
+                "--output",
+                str(review),
+            )
+            self.assertEqual(seal.returncode, 0, seal.stdout + seal.stderr)
+            sealed_payload = json.loads(review.read_text())
+            self.assertTrue(sealed_payload["upload_ready"])
+            self.assertEqual(
+                sealed_payload["auditory_review"]["reviewer_kind"],
+                "human",
+            )
+            self.assertEqual(
+                sealed_payload["quality_evidence"]["signal"]["clipped_sample_count"],
+                0,
+            )
+
+            verify = run_script(
+                "seal_voice_reference_review.py",
+                "verify",
+                "--reference",
+                str(reference),
+                "--preparation-report",
+                str(preparation),
+                "--transcript-json",
+                str(transcript),
+                "--review",
+                str(review),
+            )
+            self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+            reference.write_bytes(reference.read_bytes() + b"changed")
+            stale = run_script(
+                "seal_voice_reference_review.py",
+                "verify",
+                "--reference",
+                str(reference),
+                "--preparation-report",
+                str(preparation),
+                "--transcript-json",
+                str(transcript),
+                "--review",
+                str(review),
+            )
+            self.assertNotEqual(stale.returncode, 0)
+            self.assertIn("stale reference_identity", stale.stdout)
 
 
 class CreatorFidelityTests(unittest.TestCase):

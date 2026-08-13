@@ -109,7 +109,16 @@ Use when the user wants Codex to replace manual recording.
    python3 scripts/prepare_voice_reference.py --input accepted-video.mp4 --transcript-json transcript.json --output owner-reference.wav --report owner-reference-report.json --owner-consent-confirmed
    ```
 
-   The prepared reference still requires an actual listening/privacy review before upload.
+   Transcribe the exact prepared WAV, listen to it from beginning to end, then seal and verify the exact-byte review. Do not pass a verdict flag from waveform or transcript evidence alone:
+
+   ```bash
+   <transcriber-python> scripts/transcribe_with_faster_whisper.py owner-reference.wav --out-dir owner-reference-transcript --model small.en
+   python3 scripts/seal_voice_reference_review.py preflight --reference owner-reference.wav --preparation-report owner-reference-report.json --transcript-json owner-reference-transcript/transcript.json
+   python3 scripts/seal_voice_reference_review.py seal --reference owner-reference.wav --preparation-report owner-reference-report.json --transcript-json owner-reference-transcript/transcript.json --reviewer-kind human --reviewer-name "<actual reviewer>" --listened-from-start-to-finish --only-owner-speaks --no-background-audio --no-private-audio --representative-tutorial-delivery --no-clipped-words --no-edit-artifacts --notes "<specific listening evidence>" --output owner-reference-review.json
+   python3 scripts/seal_voice_reference_review.py verify --reference owner-reference.wav --preparation-report owner-reference-report.json --transcript-json owner-reference-transcript/transcript.json --review owner-reference-review.json
+   ```
+
+   Upload only when verification returns `upload_ready: true`. The preparer binds its selection transcript to the source bytes and emits xAI's recommended 24 kHz mono PCM; the seal binds the prepared WAV, its transcript, automated quality evidence, and the listening/privacy verdict. Any changed file invalidates readiness.
 
 6. Use the resumable director as the canonical control loop:
 
@@ -192,6 +201,7 @@ After manifest cleanup, the job retains only `delivery/final.mp4`. Never delete 
 - `production_evidence.py`, `validate_shot_plan.py`, `seal_production_review.py`: immutable shot hashes and exact-media review gates.
 - `creator_fidelity.py`, `audit_creator_fidelity.py`: measurable creator fingerprint plus plan/final likeness and narration/visual-contract gates.
 - `prepare_voice_reference.py`: consent-gated 90-120 second owner-reference preparation for xAI custom voice setup.
+- `seal_voice_reference_review.py`: exact-byte technical, transcript, listening, privacy, and upload-readiness gate for the owner reference.
 - `xai_voiceover.py`: consent-gated xAI custom-voice narration, including per-shot generation.
 - `audit_voiceover.py`: reject synthesized shots with missing, changed, or repeated wording before assembly.
 - `assemble_shot_plan.py`: synchronize shot recordings with narration and reject unnatural timing.

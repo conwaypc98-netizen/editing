@@ -61,6 +61,8 @@ The validator must reject plans that lack these fields. "It looked okay" is not 
 
 - Only use a voice that the owner created or verified through xAI's consent flow.
 - Never create a clone from scraped or pre-existing recordings of another person.
+- Before console upload, bind the selection transcript to the exact source, transcribe the exact 90-120 second prepared WAV, listen from beginning to end, and seal the exact-byte privacy/quality review. Upload only when `seal_voice_reference_review.py verify` returns `upload_ready: true`.
+- Reject a reference containing another speaker, music, notifications, private speech, clipped words, edit artifacts, or delivery that is not representative of Luna tutorials. Automated transcript/audio checks cannot substitute for listening.
 - Store only the `voice_id`; API keys remain in environment variables.
 - Generate narration per shot so pacing can be directed with xAI speech tags and visual timing can be verified.
 - Generate only missing or stale shots. Never overwrite current reviewed takes merely because another shot changed.
