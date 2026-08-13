@@ -309,12 +309,12 @@ def seal(args: argparse.Namespace) -> int:
     return 0 if report["passed"] else 1
 
 
-def verify(args: argparse.Namespace) -> int:
-    reference, preparation_report, transcript = resolved_paths(args)
-    review_path = Path(args.review).expanduser().resolve()
-    if not review_path.is_file():
-        raise SystemExit(f"Voice-reference review not found: {review_path}")
-    review = read_json(review_path)
+def validate_review_evidence(
+    review: dict,
+    reference: Path,
+    preparation_report: Path,
+    transcript: Path,
+) -> tuple[dict, list[str], list[str]]:
     evidence, errors, warnings = quality_evidence(reference, preparation_report, transcript)
     if review.get("kind") != "voice_reference_review":
         errors.append("Review kind is not voice_reference_review.")
@@ -342,6 +342,21 @@ def verify(args: argparse.Namespace) -> int:
             errors.append(f"Voice-reference review verdict {field} is not true.")
     if len(str(verdict.get("notes", "")).split()) < 5:
         errors.append("Voice-reference review has no concrete listening notes.")
+    return evidence, errors, warnings
+
+
+def verify(args: argparse.Namespace) -> int:
+    reference, preparation_report, transcript = resolved_paths(args)
+    review_path = Path(args.review).expanduser().resolve()
+    if not review_path.is_file():
+        raise SystemExit(f"Voice-reference review not found: {review_path}")
+    review = read_json(review_path)
+    evidence, errors, warnings = validate_review_evidence(
+        review,
+        reference,
+        preparation_report,
+        transcript,
+    )
     result = {
         "schema_version": 1,
         "kind": "voice_reference_review_verification",

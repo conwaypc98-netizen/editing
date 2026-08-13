@@ -46,10 +46,10 @@ Use the luna-longform-editor skill on "C:\path\to\video.mov". Create an isolated
 For autonomous recording, use:
 
 ```text
-Use the luna-longform-editor skill in synthetic mode. Build a schema-version 4 project/shot plan for this topic: <topic>, including claim-support mappings, capture checkpoints, retake triggers, creator-style rationales, and evidence-bound voice-performance contracts. Validate it and pass the creator-fidelity plan audit, then resume with production_director.py --execute-safe. Use Computer Use to produce each desktop shot, seal exact-media recording and voice reviews, use my verified xAI voice ID from XAI_VOICE_ID, and keep resuming until the rebuilt final passes the adversarial creator-fidelity, visual, transcript, loudness, decode, plan, and zoom gates. Never infer that a background app was captured; inspect the actual pixels and retake or use the macOS/Windows exact-window state-storyboard fallback.
+Use the luna-longform-editor skill in synthetic mode. Build a schema-version 3 project and schema-version 4 shot plan for this topic: <topic>, including claim-support mappings, capture checkpoints, retake triggers, creator-style rationales, and evidence-bound voice-performance contracts. Validate it and pass the creator-fidelity plan audit, then resume with production_director.py --execute-safe. Use Computer Use to produce each desktop shot, seal exact-media recording and voice reviews, register my verified xAI voice against the exact reviewed source WAV, and keep resuming until the rebuilt final passes the adversarial creator-fidelity, visual, transcript, loudness, decode, plan, and zoom gates. Never infer that a background app was captured; inspect the actual pixels and retake or use the macOS/Windows exact-window state-storyboard fallback.
 ```
 
-The one-time voice step is creating and verifying your own custom voice in the xAI console. Direct API creation is restricted to enabled Enterprise teams, so the package uses the console path instead of promising an unavailable free API workflow. After that, set `XAI_API_KEY` and `XAI_VOICE_ID`; the workflow verifies the chosen voice, generates only stale per-shot WAV/timestamp metadata, automatically corrects measurable cadence when possible, transcribes each result, and still requires a real listening verdict. API keys are never stored in the repo.
+The one-time voice step is creating and verifying your own custom voice in the xAI console. Direct API creation is restricted to enabled Enterprise teams, so the package uses the console path instead of promising an unavailable free API workflow. After that, set `XAI_API_KEY` and `XAI_VOICE_ID`; the director downloads xAI's stored source audio, requires its SHA-256 to equal the exact human-reviewed WAV, and writes `voice/voice_registration.json`. It repeats that source-hash check before each real generation batch, generates only stale per-shot WAV/timestamp metadata, corrects measurable cadence when possible, transcribes each result, and still requires a real listening verdict. API keys are never stored in the repo.
 
 An owner-consented reference from an accepted video can be prepared locally with:
 
@@ -58,6 +58,12 @@ python3 luna-longform-editor/scripts/prepare_voice_reference.py --input accepted
 ```
 
 Transcribe the exact prepared WAV, listen to it from beginning to end, and run `seal_voice_reference_review.py seal` followed by `verify`. Upload only when the exact-byte review reports `upload_ready: true`; the seal rejects stale preparation/transcript/audio evidence and requires explicit verdicts for owner identity, background audio, privacy, representative delivery, clipped words, and edit artifacts.
+
+After uploading that exact WAV in the xAI console, bind the returned voice ID to it:
+
+```bash
+python3 luna-longform-editor/scripts/xai_voiceover.py register --reference voice/owner-reference.wav --preparation-report voice/owner-reference-report.json --transcript-json voice/owner-reference-transcript/transcript.json --reference-review voice/owner-reference-review.json --output voice/voice_registration.json --owner-consent-confirmed
+```
 
 For an existing synthetic job, the canonical resume command is:
 

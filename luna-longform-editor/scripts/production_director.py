@@ -17,8 +17,10 @@ from production_evidence import (
     transcript_source_errors,
     validate_sealed_review,
     validate_shot_plan,
+    voice_registration_errors,
     xai_voice_provenance_errors,
 )
+from seal_voice_reference_review import validate_review_evidence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -34,6 +36,13 @@ def resolve_job(value: str) -> tuple[Path, dict]:
     if manifest.get("mode") != "synthetic":
         raise SystemExit("production_director.py only operates synthetic Luna jobs.")
     return root, manifest
+
+
+def configured_path(job: Path, value: object, fallback: Path) -> Path:
+    if not isinstance(value, (str, os.PathLike)) or not str(value).strip():
+        return fallback
+    path = Path(value).expanduser()
+    return path.resolve() if path.is_absolute() else (job / path).resolve()
 
 
 def transcriber_python() -> Path | None:
@@ -259,6 +268,160 @@ def derive_status(job: Path) -> dict:
     voice_config = project.get("voice", {})
     voice_provider = str(voice_config.get("provider", "xai")).strip().lower()
     require_xai_provenance = voice_provider == "xai"
+    try:
+        project_schema = int(project.get("schema_version", 0))
+    except (TypeError, ValueError):
+        project_schema = 0
+    registration_path = None
+    registered_voice_id = None
+    require_sealed_reference = require_xai_provenance and project_schema >= 3
+    if require_sealed_reference:
+        consent = str(voice_config.get("owner_consent", "")).lower() == "confirmed"
+        if not consent:
+            result["stage"] = "voice_configuration"
+            result["next"] = agent_action(
+                "confirm_voice_ownership",
+                "The project brief must record owner_consent as confirmed before cloned narration is generated.",
+                project=str(project_path),
+            )
+            return result
+
+        reference_config = (
+            voice_config.get("reference")
+            if isinstance(voice_config.get("reference"), dict)
+            else {}
+        )
+        reference = configured_path(
+            job,
+            reference_config.get("audio"),
+            job / "voice" / "owner-reference.wav",
+        )
+        preparation_report = configured_path(
+            job,
+            reference_config.get("preparation_report"),
+            job / "voice" / "owner-reference-report.json",
+        )
+        reference_transcript = configured_path(
+            job,
+            reference_config.get("transcript"),
+            job / "voice" / "owner-reference-transcript" / "transcript.json",
+        )
+        reference_review = configured_path(
+            job,
+            reference_config.get("review"),
+            job / "voice" / "owner-reference-review.json",
+        )
+        reference_paths = {
+            "reference": reference,
+            "preparation_report": preparation_report,
+            "transcript": reference_transcript,
+            "review": reference_review,
+        }
+        missing_reference_paths = {
+            name: str(path) for name, path in reference_paths.items() if not path.is_file()
+        }
+        if missing_reference_paths:
+            result["stage"] = "voice_reference"
+            result["next"] = agent_action(
+                "prepare_and_review_xai_reference",
+                "A new autonomous project requires a source-bound owner reference, exact transcript, "
+                "and start-to-finish auditory/privacy review before the clone may be used.",
+                missing=missing_reference_paths,
+                expected={name: str(path) for name, path in reference_paths.items()},
+            )
+            return result
+
+        try:
+            reference_evidence, reference_errors, reference_warnings = validate_review_evidence(
+                read_json(reference_review),
+                reference,
+                preparation_report,
+                reference_transcript,
+            )
+        except (Exception, SystemExit) as error:
+            reference_evidence = {}
+            reference_warnings = []
+            reference_errors = [f"Voice-reference evidence is unreadable: {error}"]
+        if reference_errors:
+            result["stage"] = "voice_reference"
+            result["next"] = agent_action(
+                "repair_and_reseal_xai_reference",
+                "The configured owner reference is stale, unreviewed, or fails upload-readiness gates.",
+                errors=reference_errors,
+                warnings=reference_warnings,
+                evidence=reference_evidence,
+                verify_command=[
+                    sys.executable,
+                    str(SCRIPT_DIR / "seal_voice_reference_review.py"),
+                    "verify",
+                    "--reference",
+                    str(reference),
+                    "--preparation-report",
+                    str(preparation_report),
+                    "--transcript-json",
+                    str(reference_transcript),
+                    "--review",
+                    str(reference_review),
+                ],
+            )
+            return result
+
+        registration_path = configured_path(
+            job,
+            voice_config.get("registration"),
+            job / "voice" / "voice_registration.json",
+        )
+        configured_voice_id = os.environ.get("XAI_VOICE_ID", "").strip() or None
+        if not registration_path.is_file():
+            if not os.environ.get("XAI_API_KEY") or not configured_voice_id:
+                result["stage"] = "voice_configuration"
+                result["next"] = agent_action(
+                    "configure_verified_xai_voice",
+                    "Set XAI_API_KEY and XAI_VOICE_ID after creating the clone from the exact reviewed reference.",
+                    reference_review=str(reference_review),
+                    expected_registration=str(registration_path),
+                )
+                return result
+            result["stage"] = "voice_registration"
+            result["next"] = command_action(
+                "register_exact_xai_voice",
+                "Download xAI's stored source audio and prove this voice ID was created from the exact reviewed bytes.",
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "xai_voiceover.py"),
+                    "register",
+                    "--reference",
+                    str(reference),
+                    "--preparation-report",
+                    str(preparation_report),
+                    "--transcript-json",
+                    str(reference_transcript),
+                    "--reference-review",
+                    str(reference_review),
+                    "--output",
+                    str(registration_path),
+                    "--voice-id",
+                    configured_voice_id,
+                    "--owner-consent-confirmed",
+                ],
+            )
+            return result
+
+        registration_failures = voice_registration_errors(
+            registration_path,
+            configured_voice_id,
+        )
+        if registration_failures:
+            result["stage"] = "voice_registration"
+            result["next"] = agent_action(
+                "repair_xai_voice_registration",
+                "The xAI voice ID is not currently bound to the exact reviewed owner reference.",
+                registration=str(registration_path),
+                errors=registration_failures,
+            )
+            return result
+        registered_voice_id = str(read_json(registration_path).get("voice_id"))
+
     missing_voices = []
     missing_transcripts = []
     missing_recordings = []
@@ -293,7 +456,14 @@ def derive_status(job: Path) -> dict:
         if not voice or not voice.is_file():
             voice_provenance_errors.append("voiceover missing")
         elif require_xai_provenance:
-            voice_provenance_errors.extend(xai_voice_provenance_errors(shot, voice))
+            voice_provenance_errors.extend(
+                xai_voice_provenance_errors(
+                    shot,
+                    voice,
+                    expected_voice_id=registered_voice_id,
+                    registration=registration_path,
+                )
+            )
         if voice_provenance_errors:
             missing_voices.append(shot_id)
             voice_provenance_failures[shot_id] = voice_provenance_errors
@@ -404,11 +574,14 @@ def derive_status(job: Path) -> dict:
                 },
             )
             return result
-        if not os.environ.get("XAI_API_KEY") or not os.environ.get("XAI_VOICE_ID"):
+        configured_generation_voice = registered_voice_id or os.environ.get(
+            "XAI_VOICE_ID", ""
+        ).strip()
+        if not os.environ.get("XAI_API_KEY") or not configured_generation_voice:
             result["stage"] = "voice_configuration"
             result["next"] = agent_action(
                 "configure_verified_xai_voice",
-                "XAI_API_KEY and XAI_VOICE_ID are required for missing or stale narration files.",
+                "An xAI API key and verified custom voice are required for missing or stale narration files.",
                 missing_shots=missing_voices,
                 provenance_errors=voice_provenance_failures,
             )
@@ -423,8 +596,12 @@ def derive_status(job: Path) -> dict:
             str(voice_dir),
             "--language",
             str(voice_config.get("language", "en")),
+            "--voice-id",
+            configured_generation_voice,
             "--owner-consent-confirmed",
         ]
+        if registration_path is not None:
+            command.extend(["--voice-registration", str(registration_path)])
         for shot_id in missing_voices:
             command.extend(["--shot-id", shot_id])
         result["stage"] = "voice_generation"

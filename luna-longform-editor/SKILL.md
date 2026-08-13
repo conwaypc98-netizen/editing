@@ -120,6 +120,14 @@ Use when the user wants Codex to replace manual recording.
 
    Upload only when verification returns `upload_ready: true`. The preparer binds its selection transcript to the source bytes and emits xAI's recommended 24 kHz mono PCM; the seal binds the prepared WAV, its transcript, automated quality evidence, and the listening/privacy verdict. Any changed file invalidates readiness.
 
+   After the owner uploads that exact WAV and xAI returns the custom voice ID, register the clone before synthesis:
+
+   ```bash
+   python3 scripts/xai_voiceover.py register --reference voice/owner-reference.wav --preparation-report voice/owner-reference-report.json --transcript-json voice/owner-reference-transcript/transcript.json --reference-review voice/owner-reference-review.json --output voice/voice_registration.json --owner-consent-confirmed
+   ```
+
+   Registration verifies the custom voice, downloads xAI's stored source audio, and requires its SHA-256 to equal the reviewed WAV. The resulting record binds the voice ID to the reference, preparation report, exact transcript, and human listening seal. Never hand-author it. Changing any bound file or the configured voice invalidates registration and every narration sidecar derived from it. Before every real narration batch, the client downloads the stored source again and aborts if its hash has drifted; offline dry runs cannot satisfy this gate.
+
 6. Use the resumable director as the canonical control loop:
 
    ```bash
@@ -131,7 +139,7 @@ Use when the user wants Codex to replace manual recording.
 7. When narration is missing and the verified xAI environment is configured, the director generates only missing or stale voice files and preserves current reviewed takes. The equivalent manual command for one shot is:
 
    ```bash
-   python3 scripts/xai_voiceover.py synthesize-plan --shot-plan plans/shot_plan.json --output-dir voice --shot-id shot-001 --owner-consent-confirmed
+   python3 scripts/xai_voiceover.py synthesize-plan --shot-plan plans/shot_plan.json --output-dir voice --shot-id shot-001 --voice-registration voice/voice_registration.json --owner-consent-confirmed
    ```
 
    The client verifies the selected custom voice before synthesis, retries transient xAI failures, requests WAV output and timestamps, and writes request/media metadata without secrets. It measures actual WPM and may generate a corrected-speed take when the first attempt misses the approved range. A failed request cannot overwrite an existing good take. If automatic correction still misses, revise the evidence-bound voice contract instead of regenerating unchanged settings. Transcribe each generated shot, run `audit_voiceover.py`, then listen to the exact bytes. Seal a voice review only when wording, product-name pronunciation, measured cadence, identity, emotional delivery, and audio integrity all pass.
@@ -202,7 +210,7 @@ After manifest cleanup, the job retains only `delivery/final.mp4`. Never delete 
 - `creator_fidelity.py`, `audit_creator_fidelity.py`: measurable creator fingerprint plus plan/final likeness and narration/visual-contract gates.
 - `prepare_voice_reference.py`: consent-gated 90-120 second owner-reference preparation for xAI custom voice setup.
 - `seal_voice_reference_review.py`: exact-byte technical, transcript, listening, privacy, and upload-readiness gate for the owner reference.
-- `xai_voiceover.py`: consent-gated xAI custom-voice narration, including per-shot generation.
+- `xai_voiceover.py`: consent-gated xAI custom-voice registration and per-shot narration with exact-reference provenance.
 - `audit_voiceover.py`: reject synthesized shots with missing, changed, or repeated wording before assembly.
 - `assemble_shot_plan.py`: synchronize shot recordings with narration and reject unnatural timing.
 - `learn_channel_style.py`: learn portable pacing, language, section, loudness, scene-density, and compression measurements from accepted videos without retaining full transcripts.

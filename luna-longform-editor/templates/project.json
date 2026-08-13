@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "mode": "edit",
   "title": "",
   "objective": "Create a Luna Tweak video that is concise, fluent, visually clear, and complete.",
@@ -28,7 +28,14 @@
     "provider": "xai",
     "voice_id_env": "XAI_VOICE_ID",
     "owner_consent": "required",
-    "language": "en"
+    "language": "en",
+    "reference": {
+      "audio": "voice/owner-reference.wav",
+      "preparation_report": "voice/owner-reference-report.json",
+      "transcript": "voice/owner-reference-transcript/transcript.json",
+      "review": "voice/owner-reference-review.json"
+    },
+    "registration": "voice/voice_registration.json"
   },
   "delivery": {
     "resolution": "2560x1440",

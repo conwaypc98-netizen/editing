@@ -16,13 +16,18 @@ from production_evidence import (
     media_identity,
     narration_sha256,
     probe_duration,
+    read_json,
+    sha256_bytes,
+    sha256_file,
     shot_plan_spec_sha256,
     shot_spec_sha256,
     spoken_tokens,
     target_wpm_for_shot,
     tts_text_for_shot,
+    voice_registration_errors,
     write_json,
 )
+from seal_voice_reference_review import validate_review_evidence
 
 API_BASE = "https://api.x.ai"
 MAX_REQUEST_CHARS = 14000
@@ -435,6 +440,108 @@ def read_text(args: argparse.Namespace) -> str:
     return Path(args.text_file).expanduser().read_text(encoding="utf-8")
 
 
+def required_file(value: str, label: str) -> Path:
+    path = Path(value).expanduser().resolve()
+    if not path.is_file():
+        raise SystemExit(f"{label} not found: {path}")
+    return path
+
+
+def registered_voice_evidence(
+    value: str | None,
+    voice: str,
+    dry_run: bool,
+) -> tuple[Path | None, dict]:
+    if not value:
+        return None, {}
+    registration_path = required_file(value, "xAI voice registration")
+    registration_errors = voice_registration_errors(registration_path, voice)
+    if registration_errors:
+        raise SystemExit("Invalid xAI voice registration: " + " ".join(registration_errors))
+    registration = read_json(registration_path)
+    reference_hash = str(registration.get("reference_identity", {}).get("sha256", ""))
+    evidence = {
+        "voice_registration_identity": media_identity(registration_path),
+        "voice_reference_sha256_at_generation": reference_hash,
+        "voice_reference_download_verified_at_generation": False,
+    }
+    if dry_run:
+        return registration_path, evidence
+    downloaded, content_type = request_bytes(f"/v1/custom-voices/{voice}/audio")
+    if sha256_bytes(downloaded) != reference_hash:
+        raise SystemExit(
+            "xAI's current source audio for this voice no longer matches the reviewed reference."
+        )
+    evidence.update(
+        {
+            "voice_reference_download_verified_at_generation": True,
+            "voice_reference_content_type_at_generation": content_type,
+        }
+    )
+    return registration_path, evidence
+
+
+def cmd_register(args: argparse.Namespace) -> int:
+    voice = voice_id(args.voice_id)
+    if args.built_in_voice:
+        raise SystemExit("A built-in xAI voice cannot be registered as Colin's custom clone.")
+    enforce_consent(args, voice)
+    reference = required_file(args.reference, "Reviewed owner reference")
+    preparation_report = required_file(args.preparation_report, "Reference preparation report")
+    transcript = required_file(args.transcript_json, "Exact reference transcript")
+    review_path = required_file(args.reference_review, "Exact-byte reference review")
+    review = read_json(review_path)
+    evidence, errors, warnings = validate_review_evidence(
+        review,
+        reference,
+        preparation_report,
+        transcript,
+    )
+    if errors:
+        raise SystemExit("Voice reference is not upload-ready: " + " ".join(errors))
+    verification = verify_voice(voice, False, args.dry_run)
+    registration = {
+        "schema_version": 1,
+        "provider": "xai",
+        "voice_id": voice,
+        "verified": False,
+        "reference_download_verified": False,
+        "reference_identity": media_identity(reference),
+        "preparation_report_identity": media_identity(preparation_report),
+        "transcript_identity": media_identity(transcript),
+        "reference_review_identity": media_identity(review_path),
+        "reference_quality_evidence": evidence,
+        "warnings": warnings,
+        "dry_run": args.dry_run,
+    }
+    if args.dry_run:
+        print(json.dumps(registration, indent=2))
+        return 0
+
+    downloaded, content_type = request_bytes(f"/v1/custom-voices/{voice}/audio")
+    local_hash = sha256_file(reference)
+    downloaded_hash = sha256_bytes(downloaded)
+    if downloaded_hash != local_hash:
+        raise SystemExit(
+            "xAI returned different reference-audio bytes for this voice ID; do not use the clone."
+        )
+    registration.update(
+        {
+            "verified": verification.get("verified") is True,
+            "reference_download_verified": True,
+            "downloaded_reference_sha256": downloaded_hash,
+            "downloaded_reference_content_type": content_type,
+            "voice_verification_endpoint": f"/v1/custom-voices/{voice}",
+            "reference_audio_endpoint": f"/v1/custom-voices/{voice}/audio",
+            "voice_metadata": verification.get("metadata"),
+        }
+    )
+    output = Path(args.output).expanduser().resolve()
+    write_json(output, registration)
+    print(output)
+    return 0
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     voice = voice_id(args.voice_id)
     enforce_consent(args, voice)
@@ -446,6 +553,11 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
     voice = voice_id(args.voice_id)
     enforce_consent(args, voice)
     verification = verify_voice(voice, args.built_in_voice, args.dry_run)
+    _, registration_evidence = registered_voice_evidence(
+        args.voice_registration,
+        voice,
+        args.dry_run,
+    )
     output = Path(args.output).expanduser().resolve()
     result = synthesize_text(
         read_text(args),
@@ -456,6 +568,7 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
         args.speed,
         args.text_normalization,
         args.with_timestamps,
+        registration_evidence,
         maximum_cadence_attempts=args.maximum_cadence_attempts,
     )
     result["voice_verification"] = verification
@@ -482,6 +595,11 @@ def cmd_plan(args: argparse.Namespace) -> int:
         raise SystemExit("Unknown --shot-id values: " + ", ".join(unknown_ids))
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    registration_path, registration_evidence = registered_voice_evidence(
+        args.voice_registration,
+        voice,
+        args.dry_run,
+    )
     generated = []
     for shot_id in requested_ids:
         shot = shots_by_id[shot_id]
@@ -509,6 +627,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
                 "shot_id": shot_id,
                 "shot_spec_sha256": shot_spec_sha256(shot),
                 "voice_verified_at_generation": verification.get("verified") is True,
+                **registration_evidence,
             },
             approved_narration=narration,
             target_wpm=target_wpm_for_shot(shot),
@@ -543,6 +662,13 @@ def cmd_plan(args: argparse.Namespace) -> int:
         "shot_plan": str(plan_path),
         "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
         "voice_verification": verification,
+        "voice_registration": str(registration_path) if registration_path else None,
+        "voice_registration_identity": registration_evidence.get(
+            "voice_registration_identity"
+        ),
+        "voice_reference_download_verified_at_generation": registration_evidence.get(
+            "voice_reference_download_verified_at_generation"
+        ),
         "requested_shot_ids": requested_ids,
         "generated_this_run": generated,
         "generated": [
@@ -556,7 +682,11 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
-def add_voice_args(parser: argparse.ArgumentParser) -> None:
+def add_voice_args(
+    parser: argparse.ArgumentParser,
+    *,
+    include_registration: bool = False,
+) -> None:
     parser.add_argument("--voice-id")
     parser.add_argument("--language", default="en")
     parser.add_argument("--owner-consent-confirmed", action="store_true")
@@ -566,23 +696,33 @@ def add_voice_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--text-normalization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--with-timestamps", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--maximum-cadence-attempts", type=int, default=2)
+    if include_registration:
+        parser.add_argument("--voice-registration")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate consent-gated Luna narration with xAI TTS.")
     sub = parser.add_subparsers(dest="command", required=True)
+    register = sub.add_parser("register")
+    add_voice_args(register)
+    register.add_argument("--reference", required=True)
+    register.add_argument("--preparation-report", required=True)
+    register.add_argument("--transcript-json", required=True)
+    register.add_argument("--reference-review", required=True)
+    register.add_argument("--output", required=True)
+    register.set_defaults(func=cmd_register)
     check = sub.add_parser("check")
     add_voice_args(check)
     check.set_defaults(func=cmd_check)
     synthesize = sub.add_parser("synthesize")
-    add_voice_args(synthesize)
+    add_voice_args(synthesize, include_registration=True)
     text_group = synthesize.add_mutually_exclusive_group(required=True)
     text_group.add_argument("--text")
     text_group.add_argument("--text-file")
     synthesize.add_argument("--output", required=True)
     synthesize.set_defaults(func=cmd_synthesize)
     plan = sub.add_parser("synthesize-plan")
-    add_voice_args(plan)
+    add_voice_args(plan, include_registration=True)
     plan.add_argument("--shot-plan", required=True)
     plan.add_argument("--output-dir", required=True)
     plan.add_argument("--shot-id", action="append")

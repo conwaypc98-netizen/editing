@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[1]
@@ -36,6 +37,7 @@ from production_evidence import (  # noqa: E402
     transcript_source_errors,
     validate_sealed_review,
     validate_shot_plan,
+    voice_registration_errors,
     xai_voice_provenance_errors,
 )
 from verify_final_video import creator_fidelity_gate  # noqa: E402
@@ -155,6 +157,119 @@ def write_passing_creator_plan_evidence(job: Path, plan_data: dict) -> None:
     )
 
 
+def write_voice_registration_fixture(job: Path, voice_id: str = "abcd1234") -> dict:
+    voice_dir = job / "voice"
+    voice_dir.mkdir(parents=True, exist_ok=True)
+    reference = voice_dir / "owner-reference.wav"
+    preparation = voice_dir / "owner-reference-report.json"
+    transcript = voice_dir / "owner-reference-transcript" / "transcript.json"
+    review = voice_dir / "owner-reference-review.json"
+    registration = voice_dir / "voice_registration.json"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    reference.write_bytes(b"exact reviewed owner reference")
+    preparation.write_text('{"kind":"preparation"}', encoding="utf-8")
+    transcript.write_text('{"segments":[]}', encoding="utf-8")
+    review.write_text(
+        json.dumps(
+            {
+                "kind": "voice_reference_review",
+                "passed": True,
+                "upload_ready": True,
+                "reference_identity": media_identity(reference),
+                "preparation_report_identity": media_identity(preparation),
+                "transcript_identity": media_identity(transcript),
+                "auditory_review": {
+                    "reviewer_kind": "human",
+                    "reviewer_name": "Fixture Reviewer",
+                    "listened_from_start_to_finish": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    registration.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "provider": "xai",
+                "voice_id": voice_id,
+                "verified": True,
+                "reference_download_verified": True,
+                "reference_identity": media_identity(reference),
+                "preparation_report_identity": media_identity(preparation),
+                "transcript_identity": media_identity(transcript),
+                "reference_review_identity": media_identity(review),
+                "downloaded_reference_sha256": media_identity(reference)["sha256"],
+                "voice_metadata": {"voice_id": voice_id},
+                "dry_run": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "reference": reference,
+        "preparation": preparation,
+        "transcript": transcript,
+        "review": review,
+        "registration": registration,
+    }
+
+
+def write_schema_three_director_job(job: Path) -> dict:
+    (job / "plans").mkdir(parents=True)
+    (job / "qa").mkdir()
+    (job / "voice").mkdir()
+    project = {
+        "schema_version": 3,
+        "mode": "synthetic",
+        "required_story_roles": ["hook"],
+        "voice": {
+            "provider": "xai",
+            "owner_consent": "confirmed",
+            "language": "en",
+            "reference": {
+                "audio": "voice/owner-reference.wav",
+                "preparation_report": "voice/owner-reference-report.json",
+                "transcript": "voice/owner-reference-transcript/transcript.json",
+                "review": "voice/owner-reference-review.json",
+            },
+            "registration": "voice/voice_registration.json",
+        },
+    }
+    (job / "project.json").write_text(json.dumps(project), encoding="utf-8")
+    shot = {
+        "id": "shot-001",
+        "story_role": "hook",
+        "viewer_purpose": "State the result.",
+        "rationale": "Direct opening.",
+        "continuity": "Starts the video.",
+        "narration": "This is the exact registered voice test.",
+        "computer_actions": ["Show the desktop"],
+        "required_visual_state": "Desktop is visible.",
+        "timing_mode": "fit",
+        "maximum_recording_seconds": 4.0,
+    }
+    plan = {
+        "schema_version": 2,
+        "title": "Registered voice test",
+        "story": "A current owner voice is mandatory.",
+        "shots": [shot],
+    }
+    (job / "plans" / "shot_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    (job / "qa" / "shot_plan_validation.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
+                "project_identity": media_identity(job / "project.json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_passing_creator_plan_evidence(job, plan)
+    return plan
+
+
 class CompatibilityTests(unittest.TestCase):
     def test_python_scripts_parse_with_python_310_grammar(self):
         for script in SCRIPTS.glob("*.py"):
@@ -163,6 +278,60 @@ class CompatibilityTests(unittest.TestCase):
 
 
 class ProductionEvidenceTests(unittest.TestCase):
+    def test_voice_registration_tracks_exact_reviewed_reference_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = write_voice_registration_fixture(Path(temporary))
+            self.assertEqual(
+                voice_registration_errors(paths["registration"], "abcd1234"),
+                [],
+            )
+            paths["reference"].write_bytes(b"changed after registration")
+            errors = voice_registration_errors(paths["registration"], "abcd1234")
+            self.assertTrue(any("stale reference_identity" in error for error in errors))
+
+    def test_voice_provenance_binds_voice_id_registration_and_live_source_check(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = write_voice_registration_fixture(root)
+            voice = root / "shot-001.wav"
+            voice.write_bytes(b"generated voice bytes")
+            shot = {"id": "shot-001", "narration": "Use the exact owner voice."}
+            reference_hash = media_identity(paths["reference"])["sha256"]
+            sidecar = {
+                "provider": "xai",
+                "voice_id": "abcd1234",
+                "shot_id": "shot-001",
+                "shot_spec_sha256": shot_spec_sha256(shot),
+                "narration_sha256": narration_sha256(shot["narration"]),
+                "voice_registration_identity": media_identity(paths["registration"]),
+                "voice_reference_download_verified_at_generation": True,
+                "voice_reference_sha256_at_generation": reference_hash,
+                "media_identity": media_identity(voice),
+            }
+            voice.with_suffix(".wav.xai.json").write_text(
+                json.dumps(sidecar), encoding="utf-8"
+            )
+            self.assertEqual(
+                xai_voice_provenance_errors(
+                    shot,
+                    voice,
+                    expected_voice_id="abcd1234",
+                    registration=paths["registration"],
+                ),
+                [],
+            )
+            sidecar["voice_reference_download_verified_at_generation"] = False
+            voice.with_suffix(".wav.xai.json").write_text(
+                json.dumps(sidecar), encoding="utf-8"
+            )
+            errors = xai_voice_provenance_errors(
+                shot,
+                voice,
+                expected_voice_id="abcd1234",
+                registration=paths["registration"],
+            )
+            self.assertTrue(any("reverify xAI source audio" in error for error in errors))
+
     def test_mutable_review_fields_do_not_change_shot_spec_hash(self):
         shot = {
             "id": "shot-001",
@@ -476,6 +645,66 @@ class ProductionEvidenceTests(unittest.TestCase):
 
 
 class ProductionDirectorTests(unittest.TestCase):
+    def test_schema_three_requires_exact_owner_reference_chain(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary)
+            write_schema_three_director_job(job)
+            with patch.dict("os.environ", {}, clear=True):
+                status = derive_status(job)
+            self.assertEqual(status["next"]["action"], "prepare_and_review_xai_reference")
+            self.assertEqual(
+                set(status["next"]["missing"]),
+                {"reference", "preparation_report", "transcript", "review"},
+            )
+
+    def test_schema_three_registers_reviewed_reference_before_generation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary)
+            write_schema_three_director_job(job)
+            paths = write_voice_registration_fixture(job)
+            paths["registration"].unlink()
+            with (
+                patch(
+                    "production_director.validate_review_evidence",
+                    return_value=({}, [], []),
+                ),
+                patch.dict(
+                    "os.environ",
+                    {"XAI_API_KEY": "test-key", "XAI_VOICE_ID": "abcd1234"},
+                    clear=True,
+                ),
+            ):
+                status = derive_status(job)
+            self.assertEqual(status["next"]["action"], "register_exact_xai_voice")
+            command = status["next"]["command"]
+            self.assertEqual(command[command.index("--voice-id") + 1], "abcd1234")
+            self.assertEqual(
+                Path(command[command.index("--reference-review") + 1]).resolve(),
+                paths["review"].resolve(),
+            )
+
+    def test_schema_three_generation_uses_sealed_registration_without_env_voice_id(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary)
+            write_schema_three_director_job(job)
+            paths = write_voice_registration_fixture(job)
+            with (
+                patch(
+                    "production_director.validate_review_evidence",
+                    return_value=({}, [], []),
+                ),
+                patch.dict("os.environ", {"XAI_API_KEY": "test-key"}, clear=True),
+            ):
+                status = derive_status(job)
+            self.assertEqual(status["next"]["action"], "generate_xai_voiceovers")
+            command = status["next"]["command"]
+            self.assertEqual(command[command.index("--voice-id") + 1], "abcd1234")
+            self.assertEqual(
+                Path(command[command.index("--voice-registration") + 1]).resolve(),
+                paths["registration"].resolve(),
+            )
+            self.assertEqual(command[command.index("--shot-id") + 1], "shot-001")
+
     def test_accepted_delivery_must_equal_the_current_qa_candidate(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1611,6 +1840,100 @@ class PlanTransformTests(unittest.TestCase):
 
 
 class VoiceTests(unittest.TestCase):
+    def test_xai_registration_requires_exact_downloaded_reference_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = write_voice_registration_fixture(root)
+            paths["registration"].unlink()
+            args = SimpleNamespace(
+                voice_id="abcd1234",
+                built_in_voice=False,
+                owner_consent_confirmed=True,
+                reference=str(paths["reference"]),
+                preparation_report=str(paths["preparation"]),
+                transcript_json=str(paths["transcript"]),
+                reference_review=str(paths["review"]),
+                output=str(paths["registration"]),
+                dry_run=False,
+            )
+            with (
+                patch.object(
+                    xai_voiceover_module,
+                    "validate_review_evidence",
+                    return_value=({"technical": "passed"}, [], []),
+                ),
+                patch.object(
+                    xai_voiceover_module,
+                    "verify_voice",
+                    return_value={
+                        "verified": True,
+                        "metadata": {"voice_id": "abcd1234"},
+                    },
+                ),
+                patch.object(
+                    xai_voiceover_module,
+                    "request_bytes",
+                    return_value=(paths["reference"].read_bytes(), "audio/wav"),
+                ),
+            ):
+                self.assertEqual(xai_voiceover_module.cmd_register(args), 0)
+            self.assertEqual(
+                voice_registration_errors(paths["registration"], "abcd1234"),
+                [],
+            )
+
+            paths["registration"].unlink()
+            with (
+                patch.object(
+                    xai_voiceover_module,
+                    "validate_review_evidence",
+                    return_value=({}, [], []),
+                ),
+                patch.object(
+                    xai_voiceover_module,
+                    "verify_voice",
+                    return_value={
+                        "verified": True,
+                        "metadata": {"voice_id": "abcd1234"},
+                    },
+                ),
+                patch.object(
+                    xai_voiceover_module,
+                    "request_bytes",
+                    return_value=(b"different uploaded source", "audio/wav"),
+                ),
+                self.assertRaisesRegex(SystemExit, "different reference-audio bytes"),
+            ):
+                xai_voiceover_module.cmd_register(args)
+            self.assertFalse(paths["registration"].exists())
+
+    def test_registered_source_is_rechecked_before_real_generation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = write_voice_registration_fixture(Path(temporary))
+            with patch.object(
+                xai_voiceover_module,
+                "request_bytes",
+                return_value=(b"different current xAI source", "audio/wav"),
+            ), self.assertRaisesRegex(SystemExit, "no longer matches"):
+                xai_voiceover_module.registered_voice_evidence(
+                    str(paths["registration"]),
+                    "abcd1234",
+                    False,
+                )
+
+            with patch.object(
+                xai_voiceover_module,
+                "request_bytes",
+                return_value=(paths["reference"].read_bytes(), "audio/wav"),
+            ):
+                registration, evidence = xai_voiceover_module.registered_voice_evidence(
+                    str(paths["registration"]),
+                    "abcd1234",
+                    False,
+                )
+            self.assertEqual(registration.resolve(), paths["registration"].resolve())
+            self.assertTrue(evidence["voice_reference_download_verified_at_generation"])
+
     def test_custom_voice_id_format_is_checked_before_network(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "voice.wav"

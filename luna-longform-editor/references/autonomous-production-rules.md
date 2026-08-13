@@ -63,7 +63,10 @@ The validator must reject plans that lack these fields. "It looked okay" is not 
 - Never create a clone from scraped or pre-existing recordings of another person.
 - Before console upload, bind the selection transcript to the exact source, transcribe the exact 90-120 second prepared WAV, listen from beginning to end, and seal the exact-byte privacy/quality review. Upload only when `seal_voice_reference_review.py verify` returns `upload_ready: true`.
 - Reject a reference containing another speaker, music, notifications, private speech, clipped words, edit artifacts, or delivery that is not representative of Luna tutorials. Automated transcript/audio checks cannot substitute for listening.
-- Store only the `voice_id`; API keys remain in environment variables.
+- Store the non-secret `voice_id` only in its exact-reference registration record; API keys remain in environment variables.
+- After console creation, run `xai_voiceover.py register`. It must download xAI's stored source audio and match its SHA-256 to the exact reviewed WAV before the voice ID may generate production narration.
+- Bind every generated narration sidecar to the current registration-file identity. Replacing the registration, reviewed WAV, preparation report, transcript, or listening seal invalidates existing narration evidence.
+- Re-download xAI's stored source audio before every real narration batch and reject generation if its hash no longer matches registration. An offline dry run is never production proof.
 - Generate narration per shot so pacing can be directed with xAI speech tags and visual timing can be verified.
 - Generate only missing or stale shots. Never overwrite current reviewed takes merely because another shot changed.
 - Measure generated WPM against the shot contract, allow bounded automatic speed correction, and stop for direction changes if corrected delivery still misses the range.

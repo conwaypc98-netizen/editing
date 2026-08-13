@@ -275,7 +275,73 @@ def identity_matches(identity: object, path: Path) -> bool:
     return identity == media_identity(path)
 
 
-def xai_voice_provenance_errors(shot: dict, voiceover: Path) -> list[str]:
+def voice_registration_errors(registration: Path, expected_voice_id: str | None = None) -> list[str]:
+    try:
+        payload = read_json(registration)
+    except (json.JSONDecodeError, OSError) as error:
+        return [f"xAI voice registration is unreadable: {error}"]
+    errors = []
+    if payload.get("provider") != "xai":
+        errors.append("Voice registration provider is not xAI.")
+    if payload.get("verified") is not True:
+        errors.append("xAI voice registration is not verified.")
+    if payload.get("reference_download_verified") is not True:
+        errors.append("xAI voice registration did not verify the uploaded reference bytes.")
+    voice_id = str(payload.get("voice_id", ""))
+    if not re.fullmatch(r"[a-z0-9]{8}", voice_id):
+        errors.append("xAI voice registration has no valid custom voice ID.")
+    if expected_voice_id and voice_id != expected_voice_id:
+        errors.append("xAI voice registration belongs to a different voice ID.")
+    if payload.get("dry_run") is not False:
+        errors.append("xAI voice registration is a dry run or has no real-run attestation.")
+    voice_metadata = payload.get("voice_metadata")
+    if not isinstance(voice_metadata, dict) or voice_metadata.get("voice_id") != voice_id:
+        errors.append("xAI voice registration metadata does not match its voice ID.")
+    identities = {}
+    for field in (
+        "reference_identity",
+        "preparation_report_identity",
+        "transcript_identity",
+        "reference_review_identity",
+    ):
+        identity = payload.get(field)
+        path = Path(str(identity.get("path", ""))).expanduser() if isinstance(identity, dict) else None
+        if path is None or not identity_matches(identity, path):
+            errors.append(f"xAI voice registration has missing or stale {field} evidence.")
+        else:
+            identities[field] = identity
+    reference_identity = payload.get("reference_identity")
+    if isinstance(reference_identity, dict) and (
+        payload.get("downloaded_reference_sha256") != reference_identity.get("sha256")
+    ):
+        errors.append("xAI voice registration download hash does not match the reviewed reference.")
+    review_identity = identities.get("reference_review_identity")
+    if review_identity:
+        try:
+            review = read_json(Path(review_identity["path"]))
+        except (json.JSONDecodeError, OSError) as error:
+            errors.append(f"xAI voice registration listening review is unreadable: {error}")
+            return errors
+        if review.get("passed") is not True or review.get("upload_ready") is not True:
+            errors.append("xAI voice registration points to a review that is not upload-ready.")
+        for registration_field, review_field in (
+            ("reference_identity", "reference_identity"),
+            ("preparation_report_identity", "preparation_report_identity"),
+            ("transcript_identity", "transcript_identity"),
+        ):
+            if identities.get(registration_field) != review.get(review_field):
+                errors.append(
+                    f"xAI voice registration and listening review disagree on {review_field}."
+                )
+    return errors
+
+
+def xai_voice_provenance_errors(
+    shot: dict,
+    voiceover: Path,
+    expected_voice_id: str | None = None,
+    registration: Path | None = None,
+) -> list[str]:
     shot_id = str(shot.get("id", "unknown"))
     sidecar = voiceover.with_suffix(voiceover.suffix + ".xai.json")
     if not sidecar.is_file():
@@ -287,6 +353,23 @@ def xai_voice_provenance_errors(shot: dict, voiceover: Path) -> list[str]:
     errors = []
     if metadata.get("provider") != "xai":
         errors.append(f"{shot_id} voice provenance provider is not xAI.")
+    if expected_voice_id and metadata.get("voice_id") != expected_voice_id:
+        errors.append(f"{shot_id} voice provenance used a different xAI voice ID.")
+    if registration is not None and not identity_matches(
+        metadata.get("voice_registration_identity"), registration
+    ):
+        errors.append(f"{shot_id} voice provenance has stale xAI voice registration evidence.")
+    if registration is not None:
+        try:
+            registration_payload = read_json(registration)
+        except (json.JSONDecodeError, OSError) as error:
+            errors.append(f"{shot_id} xAI voice registration is unreadable: {error}")
+            registration_payload = {}
+        reference_hash = registration_payload.get("reference_identity", {}).get("sha256")
+        if metadata.get("voice_reference_download_verified_at_generation") is not True:
+            errors.append(f"{shot_id} did not reverify xAI source audio at generation time.")
+        if metadata.get("voice_reference_sha256_at_generation") != reference_hash:
+            errors.append(f"{shot_id} generation used different owner-reference evidence.")
     if metadata.get("shot_id") != shot_id:
         errors.append(f"{shot_id} voice provenance belongs to another shot.")
     if metadata.get("shot_spec_sha256") != shot_spec_sha256(shot):
