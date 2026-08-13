@@ -17,6 +17,7 @@ from production_evidence import (
     media_identity,
     read_json,
     shot_plan_spec_sha256,
+    target_wpm_for_shot,
     write_json,
 )
 
@@ -92,7 +93,18 @@ def audit_plan(plan: dict, project: dict, profile: dict) -> tuple[list[str], lis
     target_wpm = float(
         profile.get("learned_measurements", {}).get("words_per_minute_median") or 190.0
     )
-    estimated_duration = len(tokens(full_text)) / target_wpm * 60.0 if target_wpm else 0.0
+    shot_timings = []
+    for shot in shots:
+        narration_words = tokens(str(shot.get("narration", "")))
+        planned_wpm = target_wpm_for_shot(shot)
+        planned_midpoint = sum(planned_wpm) / 2.0 if planned_wpm else target_wpm
+        estimated = (
+            len(narration_words) / planned_midpoint * 60.0
+            if planned_midpoint > 0
+            else 0.0
+        )
+        shot_timings.append((planned_wpm, planned_midpoint, estimated))
+    estimated_duration = sum(item[2] for item in shot_timings)
     metrics = text_style_metrics(full_text, narrations, estimated_duration or None)
 
     if metrics["adjacent_repeated_phrases"]:
@@ -122,13 +134,13 @@ def audit_plan(plan: dict, project: dict, profile: dict) -> tuple[list[str], lis
             )
 
     per_shot = []
-    for shot in shots:
+    for shot, timing in zip(shots, shot_timings):
         shot_id = str(shot.get("id", "unknown"))
         narration = str(shot.get("narration", ""))
         actions = " ".join(str(value) for value in shot.get("computer_actions", []))
         required_state = str(shot.get("required_visual_state", ""))
         narration_words = tokens(narration)
-        estimated = len(narration_words) / target_wpm * 60.0 if target_wpm else 0.0
+        planned_wpm, planned_midpoint, estimated = timing
         maximum = float(shot.get("maximum_recording_seconds") or 0.0)
         if maximum and estimated > maximum * 1.18:
             errors.append(
@@ -141,10 +153,24 @@ def audit_plan(plan: dict, project: dict, profile: dict) -> tuple[list[str], lis
 
         action_language = any(word in ACTION_WORDS for word in narration_words)
         action_overlap = lexical_overlap(narration, actions)
-        if str(shot.get("story_role", "")).lower() in {"setup", "tutorial", "proof"}:
-            if not action_language and action_overlap < 0.04:
-                warnings.append(
-                    f"{shot_id} narration has weak lexical alignment with its computer actions; inspect it semantically."
+        if (
+            str(shot.get("story_role", "")).lower() in {"setup", "tutorial", "proof"}
+            and not action_language
+            and action_overlap < 0.04
+        ):
+            warnings.append(
+                f"{shot_id} narration has weak lexical alignment with its computer actions; inspect it semantically."
+            )
+
+        if planned_wpm:
+            pace_ratio = planned_midpoint / target_wpm if target_wpm else 1.0
+            if not 0.75 <= pace_ratio <= 1.25:
+                message = (
+                    f"{shot_id} planned voice midpoint is {planned_midpoint:.1f} WPM, "
+                    f"or {pace_ratio:.2f}x the accepted Luna pace."
+                )
+                (errors if confidence_level(profile) in {"medium", "high"} else warnings).append(
+                    message
                 )
 
         contract = shot.get("claim_support") if isinstance(shot.get("claim_support"), dict) else {}
@@ -167,6 +193,12 @@ def audit_plan(plan: dict, project: dict, profile: dict) -> tuple[list[str], lis
                 "word_count": len(narration_words),
                 "estimated_narration_seconds": round(estimated, 3),
                 "maximum_recording_seconds": maximum,
+                "planned_words_per_minute": {
+                    "minimum": planned_wpm[0],
+                    "maximum": planned_wpm[1],
+                }
+                if planned_wpm
+                else None,
                 "action_overlap": round(action_overlap, 4),
                 "claim_overlap": round(claim_overlap, 4),
                 "evidence_overlap": round(evidence_overlap, 4),
@@ -195,6 +227,7 @@ def audit_plan(plan: dict, project: dict, profile: dict) -> tuple[list[str], lis
     return errors, warnings, {
         "estimated_duration_seconds": round(estimated_duration, 3),
         "target_words_per_minute": target_wpm,
+        "effective_planned_words_per_minute": metrics.get("words_per_minute"),
         "style_metrics": metrics,
         "fingerprint": fidelity,
         "shots": per_shot,

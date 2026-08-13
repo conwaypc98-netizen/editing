@@ -43,10 +43,10 @@ Use the luna-longform-editor skill to edit "C:\path\to\my raw video.mov". Create
 To have Codex record and narrate the tutorial instead of you:
 
 ```text
-Use the luna-longform-editor skill in synthetic mode for this topic: <topic>. Write a schema-version 3 script/shot plan with a spoken-claim-to-visible-evidence contract, capture checkpoints, retake triggers, and creator-style rationale for every shot. Validate it and pass the creator-fidelity plan audit, then keep resuming the job with production_director.py --execute-safe. Record each Windows desktop shot, inspect the actual captured pixels, seal exact-media recording and voice reviews, generate narration with my verified xAI custom voice, and do not accept the final until the adversarial creator-fidelity, visual, transcript, plan, zoom, loudness, and decode gates all pass.
+Use the luna-longform-editor skill in synthetic mode for this topic: <topic>. Write a schema-version 4 script/shot plan with a spoken-claim-to-visible-evidence contract, capture checkpoints, retake triggers, creator-style rationale, and an evidence-bound voice-performance contract for every shot. Validate it and pass the creator-fidelity plan audit, then keep resuming the job with production_director.py --execute-safe. Record each Windows desktop shot, inspect the actual captured pixels, seal exact-media recording and voice reviews, generate only missing or stale narration with my verified xAI custom voice, and do not accept the final until the adversarial creator-fidelity, visual, transcript, plan, zoom, loudness, and decode gates all pass.
 ```
 
-Create your own custom voice once in the xAI console, then set `XAI_API_KEY` and `XAI_VOICE_ID` in the environment visible to Codex. The script requires explicit owner-consent confirmation and does not clone voices from old videos.
+Create your own custom voice once in the xAI console, then set `XAI_API_KEY` and `XAI_VOICE_ID` in the environment visible to Codex. Direct API creation is restricted to enabled Enterprise teams. The script requires explicit owner-consent confirmation, verifies the selected voice, and does not clone voices belonging to anyone else.
 
 If the skill is not installed yet, start with:
 

@@ -12,6 +12,8 @@ REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "luna-longform-editor" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import xai_voiceover as xai_voiceover_module  # noqa: E402
+from audit_creator_fidelity import audit_plan  # noqa: E402
 from capture_window_storyboard import (  # noqa: E402
     build_parser,
     image_signal_stats,
@@ -257,6 +259,42 @@ class ProductionEvidenceTests(unittest.TestCase):
             self.assertTrue(any("shot specification changed" in error for error in errors))
             self.assertTrue(any("approved narration" in error for error in errors))
 
+    def test_schema_four_voice_provenance_requires_verified_in_range_delivery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            voice = root / "shot-001.wav"
+            voice.write_bytes(b"generated voice bytes")
+            shot = {
+                "id": "shot-001",
+                "narration": "Open the network settings now.",
+                "voice_performance": {
+                    "tts_text": "Open the network settings [pause] now.",
+                    "speed": 1.05,
+                    "target_words_per_minute": {"minimum": 210, "maximum": 260},
+                },
+            }
+            sidecar = voice.with_suffix(".wav.xai.json")
+            metadata = {
+                "provider": "xai",
+                "shot_id": "shot-001",
+                "shot_spec_sha256": shot_spec_sha256(shot),
+                "narration_sha256": narration_sha256(shot["narration"]),
+                "tts_text_sha256": narration_sha256(
+                    shot["voice_performance"]["tts_text"]
+                ),
+                "requested_speed": 1.05,
+                "voice_verified_at_generation": True,
+                "cadence": {"within_target": True},
+                "media_identity": media_identity(voice),
+            }
+            sidecar.write_text(json.dumps(metadata), encoding="utf-8")
+            self.assertEqual(xai_voice_provenance_errors(shot, voice), [])
+
+            metadata["cadence"]["within_target"] = False
+            sidecar.write_text(json.dumps(metadata), encoding="utf-8")
+            errors = xai_voice_provenance_errors(shot, voice)
+            self.assertTrue(any("cadence is outside" in error for error in errors))
+
     def test_transcript_source_identity_invalidates_changed_audio(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -313,6 +351,57 @@ class ProductionEvidenceTests(unittest.TestCase):
         )
         passing = validate_shot_plan(plan, project)
         self.assertTrue(passing["passed"], passing["errors"])
+
+    def test_version_four_plan_binds_spoken_words_and_luna_voice_direction(self):
+        narration = "Today I'm showing you how to lower your ping."
+        shot = {
+            "id": "shot-001",
+            "story_role": "hook",
+            "viewer_purpose": "Promise the tutorial result.",
+            "rationale": "Open directly.",
+            "continuity": "Starts the video.",
+            "narration": narration,
+            "computer_actions": ["Show the network result"],
+            "required_visual_state": "The network result is readable.",
+            "timing_mode": "fit",
+            "maximum_recording_seconds": 5.0,
+            "target_box": None,
+            "include_boxes": [],
+            "claim_support": {
+                "type": "hook",
+                "spoken_claim": "The tutorial will lower ping.",
+                "visible_evidence": "The network result is visible.",
+            },
+            "capture_checkpoints": ["The network result is readable."],
+            "retake_triggers": ["Retake if the result is cropped."],
+            "creator_style_rationale": "Uses Colin's direct outcome-first hook.",
+            "voice_performance": {
+                "tts_text": "Today I'm showing you [pause] how to lower your ping.",
+                "speed": 1.05,
+                "target_words_per_minute": {"minimum": 220, "maximum": 270},
+                "delivery_intent": "Direct and conversational, without an announcer voice.",
+                "pronunciation_checks": ["ping"],
+                "retake_triggers": ["Retake if the pause sounds hesitant."],
+            },
+        }
+        plan = {"schema_version": 4, "shots": [shot]}
+        project = {"required_story_roles": ["hook"]}
+        passing = validate_shot_plan(plan, project)
+        self.assertTrue(passing["passed"], passing["errors"])
+
+        shot["voice_performance"]["tts_text"] += " Extra words."
+        changed_words = validate_shot_plan(plan, project)
+        self.assertTrue(any("exactly the approved narration" in error for error in changed_words["errors"]))
+
+        shot["voice_performance"]["tts_text"] = "Today I'm showing you [laugh] how to lower your ping."
+        overacted = validate_shot_plan(plan, project)
+        self.assertTrue(any("not approved for Luna" in error for error in overacted["errors"]))
+
+        shot["voice_performance"]["tts_text"] = (
+            "Today I'm showing you <emphasis>how to lower your ping."
+        )
+        unbalanced = validate_shot_plan(plan, project)
+        self.assertTrue(any("unclosed speech tags" in error for error in unbalanced["errors"]))
 
     def test_recording_review_seals_extracted_frame_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -584,6 +673,106 @@ class ProductionDirectorTests(unittest.TestCase):
             errors = status["next"]["provenance_errors"]["shot-001"]
             self.assertTrue(any("shot specification changed" in error for error in errors))
 
+            with patch.dict(
+                "os.environ",
+                {"XAI_API_KEY": "test-key", "XAI_VOICE_ID": "abcd1234"},
+                clear=True,
+            ):
+                configured = derive_status(job)
+            self.assertEqual(configured["next"]["action"], "generate_xai_voiceovers")
+            command = configured["next"]["command"]
+            selected = [
+                command[index + 1]
+                for index, value in enumerate(command[:-1])
+                if value == "--shot-id"
+            ]
+            self.assertEqual(selected, ["shot-001"])
+
+    def test_out_of_range_generated_cadence_routes_to_direction_instead_of_looping(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary)
+            (job / "plans").mkdir()
+            (job / "qa").mkdir()
+            (job / "voice").mkdir()
+            project = {
+                "mode": "synthetic",
+                "required_story_roles": ["hook"],
+                "voice": {"provider": "xai", "owner_consent": "confirmed"},
+            }
+            (job / "project.json").write_text(json.dumps(project), encoding="utf-8")
+            shot = {
+                "id": "shot-001",
+                "story_role": "hook",
+                "viewer_purpose": "State the result.",
+                "rationale": "Direct opening.",
+                "continuity": "Starts the video.",
+                "narration": "Today I'm showing you the network fix.",
+                "computer_actions": ["Show the network result"],
+                "required_visual_state": "The network result is visible.",
+                "timing_mode": "fit",
+                "maximum_recording_seconds": 5.0,
+                "target_box": None,
+                "include_boxes": [],
+                "claim_support": {
+                    "type": "hook",
+                    "spoken_claim": "The video shows the network fix.",
+                    "visible_evidence": "The network result is visible.",
+                },
+                "capture_checkpoints": ["The network result is readable."],
+                "retake_triggers": ["Retake if the result is cropped."],
+                "creator_style_rationale": "Uses a direct Luna outcome-first hook.",
+                "voice_performance": {
+                    "tts_text": "Today I'm showing you [pause] the network fix.",
+                    "speed": 1.05,
+                    "target_words_per_minute": {"minimum": 220, "maximum": 270},
+                    "delivery_intent": "Direct and conversational.",
+                    "pronunciation_checks": ["network"],
+                    "retake_triggers": ["Retake if cadence sounds hesitant."],
+                },
+            }
+            plan = {
+                "schema_version": 4,
+                "title": "Cadence routing test",
+                "story": "A hook with measured delivery.",
+                "shots": [shot],
+            }
+            (job / "plans" / "shot_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+            (job / "qa" / "shot_plan_validation.json").write_text(
+                json.dumps(
+                    {
+                        "passed": True,
+                        "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
+                        "project_identity": media_identity(job / "project.json"),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            write_passing_creator_plan_evidence(job, plan)
+            voice = job / "voice" / "shot-001.wav"
+            voice.write_bytes(b"out of range generated voice")
+            voice.with_suffix(".wav.xai.json").write_text(
+                json.dumps(
+                    {
+                        "provider": "xai",
+                        "shot_id": "shot-001",
+                        "shot_spec_sha256": shot_spec_sha256(shot),
+                        "narration_sha256": narration_sha256(shot["narration"]),
+                        "tts_text_sha256": narration_sha256(
+                            shot["voice_performance"]["tts_text"]
+                        ),
+                        "requested_speed": 1.05,
+                        "voice_verified_at_generation": True,
+                        "cadence": {"within_target": False},
+                        "media_identity": media_identity(voice),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {}, clear=True):
+                status = derive_status(job)
+            self.assertEqual(status["next"]["action"], "adjust_voice_performance")
+            self.assertIn("shot-001", status["next"]["failed_shots"])
+
     def test_changed_voice_bytes_route_back_to_transcription(self):
         with tempfile.TemporaryDirectory() as temporary:
             job = Path(temporary)
@@ -710,6 +899,44 @@ class VoiceReferenceTests(unittest.TestCase):
 
 
 class CreatorFidelityTests(unittest.TestCase):
+    def test_plan_duration_uses_each_shots_voice_performance_contract(self):
+        shots = [
+            {
+                "id": "shot-001",
+                "story_role": "tutorial",
+                "narration": "Open network settings and inspect every option before changing the selected adapter now.",
+                "computer_actions": ["Open network settings"],
+                "required_visual_state": "Network settings are visible.",
+                "maximum_recording_seconds": 10.0,
+                "voice_performance": {
+                    "target_words_per_minute": {"minimum": 120, "maximum": 120}
+                },
+            },
+            {
+                "id": "shot-002",
+                "story_role": "proof",
+                "narration": "Confirm latency improves while the final benchmark result remains clearly visible onscreen today.",
+                "computer_actions": ["Show benchmark result"],
+                "required_visual_state": "Benchmark result is visible.",
+                "maximum_recording_seconds": 10.0,
+                "voice_performance": {
+                    "target_words_per_minute": {"minimum": 240, "maximum": 240}
+                },
+            },
+        ]
+        _errors, _warnings, evidence = audit_plan(
+            {"schema_version": 4, "shots": shots},
+            {"target_duration_seconds": {}},
+            {
+                "learned_measurements": {"words_per_minute_median": 200.0},
+                "creator_fingerprint": {"confidence": "low"},
+            },
+        )
+
+        expected = 13 / 120 * 60 + 13 / 240 * 60
+        self.assertAlmostEqual(evidence["estimated_duration_seconds"], expected, places=3)
+        self.assertAlmostEqual(evidence["effective_planned_words_per_minute"], 160.0)
+
     def test_final_creator_gate_is_bound_to_exact_profile_and_transcript(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1247,6 +1474,178 @@ class VoiceTests(unittest.TestCase):
             )
             self.assertEqual(allowed.returncode, 0, allowed.stderr)
             self.assertFalse(output.exists())
+
+    def test_plan_generation_targets_only_requested_stale_shots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output_dir = root / "voice"
+            output_dir.mkdir()
+            shots = [
+                {"id": "shot-001", "narration": "Keep this approved take."},
+                {"id": "shot-002", "narration": "Generate only this stale take."},
+            ]
+            plan = root / "shot_plan.json"
+            plan.write_text(
+                json.dumps({"schema_version": 2, "shots": shots}),
+                encoding="utf-8",
+            )
+            current_voice = output_dir / "shot-001.wav"
+            current_voice.write_bytes(b"current reviewed take")
+            manifest = output_dir / "voiceover_manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "generated": [
+                            {
+                                "shot_id": "shot-001",
+                                "shot_spec_sha256": shot_spec_sha256(shots[0]),
+                                "output": str(current_voice),
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            generated = run_script(
+                "xai_voiceover.py",
+                "synthesize-plan",
+                "--shot-plan",
+                str(plan),
+                "--output-dir",
+                str(output_dir),
+                "--shot-id",
+                "shot-002",
+                "--voice-id",
+                "abcd1234",
+                "--owner-consent-confirmed",
+                "--dry-run",
+            )
+            self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
+            self.assertEqual(current_voice.read_bytes(), b"current reviewed take")
+            self.assertFalse((output_dir / "shot-002.wav").exists())
+            payload = json.loads(manifest.read_text())
+            self.assertEqual(payload["requested_shot_ids"], ["shot-002"])
+            self.assertEqual(
+                [entry["shot_id"] for entry in payload["generated"]],
+                ["shot-001", "shot-002"],
+            )
+
+    def test_cadence_generation_retries_speed_and_replaces_output_atomically(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "shot.wav"
+            output.write_bytes(b"previous reviewed audio")
+            narration = " ".join(f"word{index}" for index in range(20))
+            observed_speeds = []
+
+            def fake_attempt(_chunks, attempt_output, _voice, _language, speed, *_args):
+                observed_speeds.append(speed)
+                attempt_output.write_bytes(b"RIFF" + bytes([len(observed_speeds)]) * 256)
+                return {
+                    "output": attempt_output,
+                    "duration_seconds": 10.0 if len(observed_speeds) == 1 else 5.2,
+                    "chunks": [{"characters": len(narration), "duration": 5.2}],
+                    "audio_timestamps": None,
+                }
+
+            with patch.object(
+                xai_voiceover_module,
+                "synthesize_attempt",
+                side_effect=fake_attempt,
+            ):
+                result = xai_voiceover_module.synthesize_text(
+                    narration,
+                    output,
+                    "abcd1234",
+                    "en",
+                    False,
+                    1.0,
+                    False,
+                    False,
+                    approved_narration=narration,
+                    target_wpm=(220.0, 240.0),
+                    maximum_cadence_attempts=2,
+                )
+
+            self.assertEqual(observed_speeds, [1.0, 1.5])
+            self.assertTrue(result["cadence"]["within_target"])
+            self.assertAlmostEqual(result["cadence"]["actual_words_per_minute"], 230.769, places=3)
+            self.assertNotEqual(output.read_bytes(), b"previous reviewed audio")
+            self.assertEqual(
+                json.loads(output.with_suffix(".wav.xai.json").read_text())["media_identity"],
+                media_identity(output),
+            )
+
+    def test_failed_voice_attempt_preserves_existing_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "shot.wav"
+            output.write_bytes(b"previous reviewed audio")
+            with (
+                patch.object(
+                    xai_voiceover_module,
+                    "synthesize_attempt",
+                    side_effect=SystemExit("simulated API failure"),
+                ),
+                self.assertRaisesRegex(SystemExit, "simulated API failure"),
+            ):
+                xai_voiceover_module.synthesize_text(
+                    "This generation should fail safely.",
+                    output,
+                    "abcd1234",
+                    "en",
+                    False,
+                    1.0,
+                    False,
+                    False,
+                )
+            self.assertEqual(output.read_bytes(), b"previous reviewed audio")
+            self.assertFalse(output.with_suffix(".wav.xai.json").exists())
+
+    def test_failed_cadence_retry_keeps_first_generated_take_for_direction(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "shot.wav"
+            narration = " ".join(f"word{index}" for index in range(20))
+            attempts = 0
+
+            def fake_attempt(_chunks, attempt_output, *_args):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 2:
+                    raise SystemExit("simulated corrective retry failure")
+                attempt_output.write_bytes(b"RIFF" + b"a" * 256)
+                return {
+                    "output": attempt_output,
+                    "duration_seconds": 10.0,
+                    "chunks": [{"characters": len(narration), "duration": 10.0}],
+                    "audio_timestamps": None,
+                }
+
+            with patch.object(
+                xai_voiceover_module,
+                "synthesize_attempt",
+                side_effect=fake_attempt,
+            ):
+                result = xai_voiceover_module.synthesize_text(
+                    narration,
+                    output,
+                    "abcd1234",
+                    "en",
+                    False,
+                    1.0,
+                    False,
+                    False,
+                    approved_narration=narration,
+                    target_wpm=(220.0, 240.0),
+                    maximum_cadence_attempts=2,
+                )
+
+            self.assertEqual(attempts, 2)
+            self.assertTrue(output.exists())
+            self.assertFalse(result["cadence"]["within_target"])
+            self.assertEqual(
+                result["cadence"]["retry_failure"],
+                {"attempt": 2, "error_type": "SystemExit"},
+            )
 
     def test_voiceover_audit_detects_changed_and_repeated_words(self):
         with tempfile.TemporaryDirectory() as temporary:

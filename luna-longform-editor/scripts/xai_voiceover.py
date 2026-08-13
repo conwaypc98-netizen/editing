@@ -15,10 +15,14 @@ from pathlib import Path
 from production_evidence import (
     media_identity,
     narration_sha256,
+    probe_duration,
     shot_plan_spec_sha256,
     shot_spec_sha256,
+    spoken_tokens,
+    target_wpm_for_shot,
+    tts_text_for_shot,
+    write_json,
 )
-
 
 API_BASE = "https://api.x.ai"
 MAX_REQUEST_CHARS = 14000
@@ -207,6 +211,74 @@ def verify_voice(voice: str, built_in: bool, dry_run: bool) -> dict:
     return {"voice_id": voice, "verified": True, "metadata": payload}
 
 
+def synthesize_attempt(
+    chunks: list[str],
+    output: Path,
+    voice: str,
+    language: str,
+    speed: float,
+    text_normalization: bool,
+    with_timestamps: bool,
+) -> dict:
+    parts = []
+    chunk_metadata = []
+    timestamp_offset = 0.0
+    combined_chars = []
+    combined_times = []
+    for index, chunk in enumerate(chunks, start=1):
+        part = output.parent / f"{output.stem}-part-{index:03d}.wav"
+        metadata = synthesize_chunk(
+            chunk,
+            voice,
+            language,
+            part,
+            speed,
+            text_normalization,
+            with_timestamps,
+        )
+        parts.append(part)
+        duration = float(metadata.get("duration") or 0.0) or probe_duration(part)
+        timestamps = metadata.get("audio_timestamps") or {}
+        chars = timestamps.get("graph_chars", [])
+        times = timestamps.get("graph_times", [])
+        if len(chars) == len(times):
+            combined_chars.extend(chars)
+            combined_times.extend(
+                [
+                    [
+                        round(float(start) + timestamp_offset, 6),
+                        round(float(end) + timestamp_offset, 6),
+                    ]
+                    for start, end in times
+                ]
+            )
+        chunk_metadata.append({"characters": len(chunk), "duration": round(duration, 6)})
+        timestamp_offset += duration
+    concatenate_wav(parts, output)
+    if not output.exists() or output.stat().st_size < 128:
+        raise SystemExit("Narration output was not created correctly.")
+    return {
+        "output": output,
+        "duration_seconds": probe_duration(output),
+        "chunks": chunk_metadata,
+        "audio_timestamps": {
+            "graph_chars": combined_chars,
+            "graph_times": combined_times,
+        }
+        if with_timestamps
+        else None,
+    }
+
+
+def cadence_distance(words_per_minute: float, target: tuple[float, float] | None) -> float:
+    if target is None:
+        return 0.0
+    minimum, maximum = target
+    if minimum <= words_per_minute <= maximum:
+        return 0.0
+    return minimum - words_per_minute if words_per_minute < minimum else words_per_minute - maximum
+
+
 def synthesize_text(
     text: str,
     output: Path,
@@ -217,67 +289,143 @@ def synthesize_text(
     text_normalization: bool,
     with_timestamps: bool,
     shot_context: dict | None = None,
+    approved_narration: str | None = None,
+    target_wpm: tuple[float, float] | None = None,
+    maximum_cadence_attempts: int = 2,
 ) -> dict:
     chunks = split_text(text)
+    approved_narration = approved_narration if approved_narration is not None else text
+    word_count = len(spoken_tokens(approved_narration))
+    if target_wpm is not None:
+        minimum, maximum = target_wpm
+        if not 100 <= minimum <= maximum <= 360:
+            raise SystemExit("Target narration cadence must stay between 100 and 360 words per minute.")
+    if maximum_cadence_attempts < 1 or maximum_cadence_attempts > 4:
+        raise SystemExit("Maximum cadence attempts must be between 1 and 4.")
+    cadence_target = target_wpm if word_count >= 8 else None
+
     output.parent.mkdir(parents=True, exist_ok=True)
     manifest = {
         "provider": "xai",
         "voice_id": voice,
         "language": language,
         "characters": len(text),
-        "requests": len(chunks),
+        "spoken_words": word_count,
+        "requests_per_attempt": len(chunks),
         "output": str(output),
         "dry_run": dry_run,
-        "narration_sha256": narration_sha256(text),
-        "speed": speed,
+        "narration_sha256": narration_sha256(approved_narration),
+        "tts_text_sha256": narration_sha256(text),
+        "requested_speed": speed,
         "text_normalization": text_normalization,
         "with_timestamps": with_timestamps,
     }
     manifest.update(shot_context or {})
     if dry_run:
-        return manifest
-    with tempfile.TemporaryDirectory(prefix="luna-xai-voice-") as directory:
-        parts = []
-        chunk_metadata = []
-        timestamp_offset = 0.0
-        combined_chars = []
-        combined_times = []
-        for index, chunk in enumerate(chunks, start=1):
-            part = Path(directory) / f"part_{index:03d}.wav"
-            metadata = synthesize_chunk(
-                chunk,
-                voice,
-                language,
-                part,
-                speed,
-                text_normalization,
-                with_timestamps,
-            )
-            parts.append(part)
-            duration = float(metadata.get("duration") or 0.0)
-            timestamps = metadata.get("audio_timestamps") or {}
-            chars = timestamps.get("graph_chars", [])
-            times = timestamps.get("graph_times", [])
-            if len(chars) == len(times):
-                combined_chars.extend(chars)
-                combined_times.extend(
-                    [[round(float(start) + timestamp_offset, 6), round(float(end) + timestamp_offset, 6)] for start, end in times]
-                )
-            chunk_metadata.append({"characters": len(chunk), "duration": duration})
-            timestamp_offset += duration
-        concatenate_wav(parts, output)
-    if not output.exists() or output.stat().st_size < 128:
-        raise SystemExit("Narration output was not created correctly.")
-    manifest["media_identity"] = media_identity(output)
-    manifest["chunks"] = chunk_metadata
-    if with_timestamps:
-        manifest["audio_timestamps"] = {
-            "graph_chars": combined_chars,
-            "graph_times": combined_times,
+        manifest["cadence"] = {
+            "target_words_per_minute": {
+                "minimum": target_wpm[0],
+                "maximum": target_wpm[1],
+            }
+            if target_wpm
+            else None,
+            "maximum_attempts": maximum_cadence_attempts,
+            "enforced": cadence_target is not None,
         }
+        return manifest
+
+    with tempfile.TemporaryDirectory(prefix="luna-xai-voice-") as directory:
+        directory_path = Path(directory)
+        attempts = []
+        retry_failure = None
+        current_speed = speed
+        for attempt_index in range(1, maximum_cadence_attempts + 1):
+            attempt_output = directory_path / f"attempt-{attempt_index:02d}.wav"
+            try:
+                generated = synthesize_attempt(
+                    chunks,
+                    attempt_output,
+                    voice,
+                    language,
+                    current_speed,
+                    text_normalization,
+                    with_timestamps,
+                )
+            except (SystemExit, OSError, subprocess.SubprocessError, ValueError) as error:
+                if not attempts:
+                    raise
+                retry_failure = {
+                    "attempt": attempt_index,
+                    "error_type": type(error).__name__,
+                }
+                break
+            duration = float(generated["duration_seconds"])
+            words_per_minute = word_count / (duration / 60.0) if duration > 0 else 0.0
+            attempt = {
+                **generated,
+                "attempt": attempt_index,
+                "speed": round(current_speed, 4),
+                "words_per_minute": round(words_per_minute, 3),
+                "distance_from_target": round(
+                    cadence_distance(words_per_minute, cadence_target), 3
+                ),
+            }
+            attempts.append(attempt)
+            if cadence_target is None or attempt["distance_from_target"] == 0:
+                break
+            if words_per_minute <= 0:
+                break
+            target_midpoint = sum(cadence_target) / 2.0
+            adjusted_speed = min(1.5, max(0.7, current_speed * target_midpoint / words_per_minute))
+            if abs(adjusted_speed - current_speed) < 0.01:
+                break
+            current_speed = round(adjusted_speed, 4)
+
+        selected = min(attempts, key=lambda item: item["distance_from_target"])
+        with tempfile.NamedTemporaryFile(
+            prefix=f"{output.stem}-approved-",
+            suffix=output.suffix or ".wav",
+            dir=output.parent,
+            delete=False,
+        ) as handle:
+            staged_output = Path(handle.name)
+        try:
+            shutil.copy2(selected["output"], staged_output)
+            staged_output.replace(output)
+        finally:
+            if staged_output.exists():
+                staged_output.unlink()
+
+    cadence_passed = selected["distance_from_target"] == 0
+    manifest["speed"] = selected["speed"]
+    manifest["media_identity"] = media_identity(output)
+    manifest["chunks"] = selected["chunks"]
+    manifest["cadence"] = {
+        "target_words_per_minute": {
+            "minimum": target_wpm[0],
+            "maximum": target_wpm[1],
+        }
+        if target_wpm
+        else None,
+        "actual_words_per_minute": selected["words_per_minute"],
+        "duration_seconds": round(float(selected["duration_seconds"]), 6),
+        "within_target": cadence_passed,
+        "enforced": cadence_target is not None,
+        "attempts": [
+            {
+                key: value
+                for key, value in attempt.items()
+                if key not in {"output", "chunks", "audio_timestamps"}
+            }
+            for attempt in attempts
+        ],
+        "retry_failure": retry_failure,
+    }
+    if with_timestamps:
+        manifest["audio_timestamps"] = selected["audio_timestamps"]
     sidecar = output.with_suffix(output.suffix + ".xai.json")
     manifest["metadata_sidecar"] = str(sidecar)
-    sidecar.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    write_json(sidecar, manifest)
     return manifest
 
 
@@ -308,6 +456,7 @@ def cmd_synthesize(args: argparse.Namespace) -> int:
         args.speed,
         args.text_normalization,
         args.with_timestamps,
+        maximum_cadence_attempts=args.maximum_cadence_attempts,
     )
     result["voice_verification"] = verification
     print(json.dumps(result, indent=2))
@@ -323,28 +472,47 @@ def cmd_plan(args: argparse.Namespace) -> int:
     shots = plan.get("shots", [])
     if not shots:
         raise SystemExit("Shot plan contains no shots.")
+    shots_by_id = {
+        str(shot.get("id", f"shot-{index:03d}")): shot
+        for index, shot in enumerate(shots, start=1)
+    }
+    requested_ids = list(dict.fromkeys(args.shot_id or shots_by_id))
+    unknown_ids = [shot_id for shot_id in requested_ids if shot_id not in shots_by_id]
+    if unknown_ids:
+        raise SystemExit("Unknown --shot-id values: " + ", ".join(unknown_ids))
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     generated = []
-    for index, shot in enumerate(shots, start=1):
-        shot_id = str(shot.get("id", f"shot-{index:03d}"))
+    for shot_id in requested_ids:
+        shot = shots_by_id[shot_id]
         narration = str(shot.get("narration", "")).strip()
         if not narration:
             raise SystemExit(f"{shot_id} has no narration.")
+        performance = shot.get("voice_performance")
+        shot_speed = (
+            float(performance.get("speed", args.speed))
+            if isinstance(performance, dict)
+            else args.speed
+        )
+        tts_text = tts_text_for_shot(shot)
         output = output_dir / f"{shot_id}.wav"
         result = synthesize_text(
-            narration,
+            tts_text,
             output,
             voice,
             args.language,
             args.dry_run,
-            args.speed,
+            shot_speed,
             args.text_normalization,
             args.with_timestamps,
             {
                 "shot_id": shot_id,
                 "shot_spec_sha256": shot_spec_sha256(shot),
+                "voice_verified_at_generation": verification.get("verified") is True,
             },
+            approved_narration=narration,
+            target_wpm=target_wpm_for_shot(shot),
+            maximum_cadence_attempts=args.maximum_cadence_attempts,
         )
         result.update(
             {
@@ -353,14 +521,37 @@ def cmd_plan(args: argparse.Namespace) -> int:
             }
         )
         generated.append(result)
+    manifest_path = output_dir / "voiceover_manifest.json"
+    existing = {}
+    if manifest_path.is_file():
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            existing = {
+                item.get("shot_id"): item
+                for item in payload.get("generated", [])
+                if isinstance(item, dict)
+            }
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+    current_entries = {}
+    for shot_id, shot in shots_by_id.items():
+        entry = existing.get(shot_id)
+        if entry and entry.get("shot_spec_sha256") == shot_spec_sha256(shot):
+            current_entries[shot_id] = entry
+    current_entries.update({item["shot_id"]: item for item in generated})
     manifest = {
         "shot_plan": str(plan_path),
         "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
         "voice_verification": verification,
-        "generated": generated,
+        "requested_shot_ids": requested_ids,
+        "generated_this_run": generated,
+        "generated": [
+            current_entries[shot_id]
+            for shot_id in shots_by_id
+            if shot_id in current_entries
+        ],
     }
-    manifest_path = output_dir / "voiceover_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    write_json(manifest_path, manifest)
     print(manifest_path)
     return 0
 
@@ -374,6 +565,7 @@ def add_voice_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--text-normalization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--with-timestamps", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--maximum-cadence-attempts", type=int, default=2)
 
 
 def main() -> int:
@@ -393,10 +585,13 @@ def main() -> int:
     add_voice_args(plan)
     plan.add_argument("--shot-plan", required=True)
     plan.add_argument("--output-dir", required=True)
+    plan.add_argument("--shot-id", action="append")
     plan.set_defaults(func=cmd_plan)
     args = parser.parse_args()
     if not 0.7 <= args.speed <= 1.5:
         raise SystemExit("xAI speech speed must be between 0.7 and 1.5.")
+    if not 1 <= args.maximum_cadence_attempts <= 4:
+        raise SystemExit("Maximum cadence attempts must be between 1 and 4.")
     return args.func(args)
 
 

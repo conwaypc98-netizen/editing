@@ -90,7 +90,7 @@ Use when the user wants Codex to replace manual recording.
    ```
 
 2. Research the exact current software behavior from primary sources when accuracy can drift.
-3. Read the job's `channel_profile.json`, then write `project.json` and a schema-version 3 `plans/shot_plan.json`. Each shot must contain purpose, rationale, continuity, narration, exact computer actions, the required visible result, timing limits, target/include boxes, an explicit `claim_support` mapping, capture checkpoints, retake triggers, and a creator-style rationale. Explain how the visible pixels support the spoken claim; repeating the topic on screen is not proof. Do not add inline review blocks. Validate and seal the immutable specification:
+3. Read the job's `channel_profile.json`, then write `project.json` and a schema-version 4 `plans/shot_plan.json`. Each shot must contain purpose, rationale, continuity, narration, exact computer actions, the required visible result, timing limits, target/include boxes, an explicit `claim_support` mapping, capture checkpoints, retake triggers, a creator-style rationale, and a `voice_performance` contract. That voice contract binds tag-bearing xAI text to the same approved spoken words, speed, a creator-profiled WPM range, delivery intent, pronunciation checks, and concrete audio retake triggers. Explain how the visible pixels support the spoken claim; repeating the topic on screen is not proof. Do not add inline review blocks. Validate and seal the immutable specification:
 
    ```bash
    python3 scripts/validate_shot_plan.py --shot-plan plans/shot_plan.json --project project.json --report qa/shot_plan_validation.json
@@ -103,7 +103,7 @@ Use when the user wants Codex to replace manual recording.
    ```
 
    At low confidence, one accepted video supplies guidance and short exemplars only. At three accepted videos, learned ranges may become enforceable. Direct feedback and evidence rules always outrank imitation. Review claims, order, and CTA before generating audio; topic text is not proof of a measured result.
-5. The user must create and verify their own custom voice in the xAI console. Store the resulting ID in `XAI_VOICE_ID` and the API key in `XAI_API_KEY`. Do not scrape or create a custom voice from anyone except the consenting owner. An accepted owner recording can be prepared for the console with:
+5. The user must create and verify their own custom voice in the xAI console. Store the resulting ID in `XAI_VOICE_ID` and the API key in `XAI_API_KEY`. Console creation is the normal non-Enterprise path; do not claim API voice creation is available when the team is not enabled for it. Do not scrape or create a custom voice from anyone except the consenting owner. An accepted owner recording can be prepared for the console with:
 
    ```bash
    python3 scripts/prepare_voice_reference.py --input accepted-video.mp4 --transcript-json transcript.json --output owner-reference.wav --report owner-reference-report.json --owner-consent-confirmed
@@ -119,13 +119,13 @@ Use when the user wants Codex to replace manual recording.
 
    It derives the next state from evidence on disk, runs deterministic safe stages, and stops at the next semantic action: voice ownership/configuration, listening review, Computer Use recording, visual review, or adversarial final review. Complete that action, then run the same command again. Never skip ahead by manually declaring a stage complete.
 
-7. When narration is missing and the verified xAI environment is configured, the director generates one voice file per shot. The equivalent manual command is:
+7. When narration is missing and the verified xAI environment is configured, the director generates only missing or stale voice files and preserves current reviewed takes. The equivalent manual command for one shot is:
 
    ```bash
-   python3 scripts/xai_voiceover.py synthesize-plan --shot-plan plans/shot_plan.json --output-dir voice --owner-consent-confirmed
+   python3 scripts/xai_voiceover.py synthesize-plan --shot-plan plans/shot_plan.json --output-dir voice --shot-id shot-001 --owner-consent-confirmed
    ```
 
-   The client verifies the selected custom voice before synthesis, retries transient xAI failures, requests WAV output and timestamps, and writes request/media metadata without secrets. Transcribe each generated shot, run `audit_voiceover.py`, then listen to the exact bytes. Seal a voice review only when wording, product-name pronunciation, cadence, identity, emotional delivery, and audio integrity all pass.
+   The client verifies the selected custom voice before synthesis, retries transient xAI failures, requests WAV output and timestamps, and writes request/media metadata without secrets. It measures actual WPM and may generate a corrected-speed take when the first attempt misses the approved range. A failed request cannot overwrite an existing good take. If automatic correction still misses, revise the evidence-bound voice contract instead of regenerating unchanged settings. Transcribe each generated shot, run `audit_voiceover.py`, then listen to the exact bytes. Seal a voice review only when wording, product-name pronunciation, measured cadence, identity, emotional delivery, and audio integrity all pass.
 
 8. For each shot:
    - Start `scripts/record_desktop.py`.

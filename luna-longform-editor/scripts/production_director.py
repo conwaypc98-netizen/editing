@@ -20,7 +20,6 @@ from production_evidence import (
     xai_voice_provenance_errors,
 )
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
@@ -148,11 +147,9 @@ def creator_report_is_current(
         return False
     if not identity_matches(report.get("channel_profile_identity"), profile_path):
         return False
-    if transcript_path is not None and not identity_matches(
+    return transcript_path is None or identity_matches(
         report.get("transcript_identity"), transcript_path
-    ):
-        return False
-    return True
+    )
 
 
 def derive_status(job: Path) -> dict:
@@ -387,6 +384,26 @@ def derive_status(job: Path) -> dict:
                 project=str(project_path),
             )
             return result
+        cadence_failures = {
+            shot_id: errors
+            for shot_id, errors in voice_provenance_failures.items()
+            if errors and all("cadence is outside" in error for error in errors)
+        }
+        if cadence_failures:
+            result["stage"] = "voice_direction"
+            result["next"] = agent_action(
+                "adjust_voice_performance",
+                "Generated speech missed the approved creator cadence after automatic speed correction. "
+                "Adjust the affected shot's voice_performance speed or target range from actual evidence; "
+                "do not regenerate unchanged settings.",
+                failed_shots=cadence_failures,
+                voice_performance={
+                    str(shot.get("id")): shot.get("voice_performance")
+                    for shot in shots
+                    if str(shot.get("id")) in cadence_failures
+                },
+            )
+            return result
         if not os.environ.get("XAI_API_KEY") or not os.environ.get("XAI_VOICE_ID"):
             result["stage"] = "voice_configuration"
             result["next"] = agent_action(
@@ -396,20 +413,25 @@ def derive_status(job: Path) -> dict:
                 provenance_errors=voice_provenance_failures,
             )
             return result
+        command = [
+            sys.executable,
+            str(SCRIPT_DIR / "xai_voiceover.py"),
+            "synthesize-plan",
+            "--shot-plan",
+            str(plan_path),
+            "--output-dir",
+            str(voice_dir),
+            "--language",
+            str(voice_config.get("language", "en")),
+            "--owner-consent-confirmed",
+        ]
+        for shot_id in missing_voices:
+            command.extend(["--shot-id", shot_id])
         result["stage"] = "voice_generation"
         result["next"] = command_action(
             "generate_xai_voiceovers",
-            "One or more approved shot lines have missing or stale xAI narration.",
-            [
-                sys.executable,
-                str(SCRIPT_DIR / "xai_voiceover.py"),
-                "synthesize-plan",
-                "--shot-plan",
-                str(plan_path),
-                "--output-dir",
-                str(voice_dir),
-                "--owner-consent-confirmed",
-            ],
+            "Generate only missing or stale approved shot lines; preserve every current reviewed xAI take.",
+            command,
             missing_shots=missing_voices,
             provenance_errors=voice_provenance_failures,
         )
@@ -481,6 +503,8 @@ def derive_status(job: Path) -> dict:
         shot_id = missing_voice_reviews[0]
         shot = next(shot for shot in shots if shot.get("id") == shot_id)
         voice = next(item["voiceover"] for item in result["shots"] if item["id"] == shot_id)
+        xai_metadata_path = Path(voice).with_suffix(Path(voice).suffix + ".xai.json")
+        xai_metadata = read_json(xai_metadata_path) if xai_metadata_path.is_file() else {}
         output = voice_review_dir / f"{shot_id}.json"
         result["stage"] = "voice_listening_review"
         result["next"] = agent_action(
@@ -489,6 +513,8 @@ def derive_status(job: Path) -> dict:
             shot_id=shot_id,
             narration=shot.get("narration"),
             voiceover=voice,
+            voice_performance=shot.get("voice_performance"),
+            measured_cadence=xai_metadata.get("cadence"),
             seal_command=[
                 sys.executable,
                 str(SCRIPT_DIR / "seal_production_review.py"),

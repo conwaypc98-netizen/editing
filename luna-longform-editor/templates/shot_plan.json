@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "title": "",
   "story": "",
   "shots": [
@@ -20,6 +20,19 @@
       "capture_checkpoints": [],
       "retake_triggers": [],
       "creator_style_rationale": "",
+      "voice_performance": {
+        "tts_text": "",
+        "speed": 1.05,
+        "target_words_per_minute": {
+          "minimum": 220,
+          "maximum": 270
+        },
+        "delivery_intent": "Direct, conversational Luna tutorial delivery without an announcer voice.",
+        "pronunciation_checks": [],
+        "retake_triggers": [
+          "Retake if cadence, emphasis, pronunciation, identity, or audio texture sounds unlike Colin."
+        ]
+      },
       "video": null,
       "voiceover": null,
       "timing_mode": "fit",

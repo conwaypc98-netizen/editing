@@ -18,6 +18,7 @@ The agent writes a project brief and a shot plan before touching the desktop. Ea
 - A structured spoken-claim-to-visible-evidence contract.
 - Consequential capture checkpoints and shot-specific retake triggers.
 - A creator-style rationale grounded in the learned profile without copying an old script.
+- A voice-performance contract containing the exact approved spoken words with sparse xAI tags, planned speed, target WPM range, delivery intent, pronunciation checks, and audio retake triggers.
 
 Validate this immutable shot specification and run `audit_creator_fidelity.py plan` before generating media. Do not store recording or voice verdicts in the shot plan. Seal them separately under `qa/reviews/recording/` and `qa/reviews/voice/`, bound to both the current shot-spec hash and exact media bytes.
 
@@ -62,6 +63,9 @@ The validator must reject plans that lack these fields. "It looked okay" is not 
 - Never create a clone from scraped or pre-existing recordings of another person.
 - Store only the `voice_id`; API keys remain in environment variables.
 - Generate narration per shot so pacing can be directed with xAI speech tags and visual timing can be verified.
+- Generate only missing or stale shots. Never overwrite current reviewed takes merely because another shot changed.
+- Measure generated WPM against the shot contract, allow bounded automatic speed correction, and stop for direction changes if corrected delivery still misses the range.
+- Keep tags sparse and tutorial-appropriate. The tag-stripped words must exactly match the approved narration.
 - Listen or transcribe the synthesized narration before assembly. Reject mispronounced product names, unnatural emphasis, missing words, and cadence that does not match the channel profile.
 - Require both a passing transcript-comparison report and an explicit per-shot listening review before assembly.
 - Verify the configured xAI voice before synthesis. Preserve xAI timestamps and request metadata, retry only transient 429/500/503 failures with bounded exponential backoff, and never log the API key.

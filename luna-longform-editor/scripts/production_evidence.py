@@ -3,9 +3,9 @@
 
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
-
 
 MUTABLE_SHOT_FIELDS = {
     "video",
@@ -39,6 +39,52 @@ CLAIM_TYPES = {
     "promotion",
     "transition",
 }
+
+XAI_INLINE_SPEECH_TAGS = {
+    "breath",
+    "chuckle",
+    "cry",
+    "exhale",
+    "giggle",
+    "hum-tune",
+    "inhale",
+    "laugh",
+    "lip-smack",
+    "long-pause",
+    "pause",
+    "sigh",
+    "tongue-click",
+    "tsk",
+}
+
+XAI_WRAPPING_SPEECH_TAGS = {
+    "build-intensity",
+    "decrease-intensity",
+    "emphasis",
+    "fast",
+    "higher-pitch",
+    "laugh-speak",
+    "loud",
+    "lower-pitch",
+    "sing-song",
+    "singing",
+    "slow",
+    "soft",
+    "whisper",
+}
+
+LUNA_INLINE_SPEECH_TAGS = {"breath", "exhale", "inhale", "pause"}
+LUNA_WRAPPING_SPEECH_TAGS = {
+    "build-intensity",
+    "decrease-intensity",
+    "emphasis",
+    "fast",
+    "slow",
+    "soft",
+}
+
+SPEECH_TAG_PATTERN = re.compile(r"\[([a-z-]+)\]|<(/?)([a-z-]+)>", re.I)
+WORD_PATTERN = re.compile(r"[a-z0-9]+(?:'[a-z0-9]+)?", re.I)
 
 
 def read_json(path: Path) -> dict:
@@ -103,6 +149,116 @@ def narration_sha256(text: str) -> str:
     return sha256_bytes(text.strip().encode("utf-8"))
 
 
+def strip_speech_tags(text: str) -> str:
+    return re.sub(r"\[[a-z-]+\]|</?[a-z-]+>", " ", text, flags=re.I)
+
+
+def spoken_tokens(text: str) -> list[str]:
+    return [match.group(0).casefold() for match in WORD_PATTERN.finditer(strip_speech_tags(text))]
+
+
+def tts_text_for_shot(shot: dict) -> str:
+    performance = shot.get("voice_performance")
+    if isinstance(performance, dict) and str(performance.get("tts_text", "")).strip():
+        return str(performance["tts_text"]).strip()
+    return str(shot.get("narration", "")).strip()
+
+
+def target_wpm_for_shot(shot: dict) -> tuple[float, float] | None:
+    performance = shot.get("voice_performance")
+    if not isinstance(performance, dict):
+        return None
+    value = performance.get("target_words_per_minute")
+    if not isinstance(value, dict):
+        return None
+    try:
+        return float(value["minimum"]), float(value["maximum"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def voice_performance_errors(shot: dict, shot_id: str) -> list[str]:
+    performance = shot.get("voice_performance")
+    if not isinstance(performance, dict):
+        return [f"{shot_id} must define a voice_performance object."]
+
+    errors = []
+    tts_text = str(performance.get("tts_text", "")).strip()
+    if not tts_text:
+        errors.append(f"{shot_id} voice_performance.tts_text is required.")
+    elif len(tts_text) > 15000:
+        errors.append(f"{shot_id} voice_performance.tts_text exceeds xAI's 15,000-character limit.")
+    elif spoken_tokens(tts_text) != spoken_tokens(str(shot.get("narration", ""))):
+        errors.append(
+            f"{shot_id} voice_performance.tts_text must speak exactly the approved narration words."
+        )
+
+    try:
+        speed = float(performance.get("speed"))
+        if not 0.7 <= speed <= 1.5:
+            raise ValueError
+    except (TypeError, ValueError):
+        errors.append(f"{shot_id} voice_performance.speed must be between 0.7 and 1.5.")
+
+    target_wpm = target_wpm_for_shot(shot)
+    if target_wpm is None:
+        errors.append(
+            f"{shot_id} voice_performance.target_words_per_minute needs minimum and maximum values."
+        )
+    else:
+        minimum, maximum = target_wpm
+        if not 100 <= minimum <= maximum <= 360:
+            errors.append(
+                f"{shot_id} voice_performance.target_words_per_minute must stay between 100 and 360."
+            )
+
+    if not str(performance.get("delivery_intent", "")).strip():
+        errors.append(f"{shot_id} voice_performance.delivery_intent is required.")
+    pronunciation_checks = performance.get("pronunciation_checks")
+    if not isinstance(pronunciation_checks, list) or any(
+        not str(item).strip() for item in pronunciation_checks
+    ):
+        errors.append(f"{shot_id} voice_performance.pronunciation_checks must be a list of terms.")
+    retake_triggers = performance.get("retake_triggers")
+    if not isinstance(retake_triggers, list) or not retake_triggers or any(
+        not str(item).strip() for item in retake_triggers
+    ):
+        errors.append(f"{shot_id} voice_performance.retake_triggers must list concrete failures.")
+
+    wrapping_stack = []
+    tag_count = 0
+    for match in SPEECH_TAG_PATTERN.finditer(tts_text):
+        tag_count += 1
+        inline, closing, wrapping = match.groups()
+        if inline:
+            tag = inline.casefold()
+            if tag not in XAI_INLINE_SPEECH_TAGS:
+                errors.append(f"{shot_id} uses unsupported xAI speech tag [{inline}].")
+            elif tag not in LUNA_INLINE_SPEECH_TAGS:
+                errors.append(f"{shot_id} uses [{inline}], which is not approved for Luna tutorials.")
+            continue
+        tag = str(wrapping).casefold()
+        if tag not in XAI_WRAPPING_SPEECH_TAGS:
+            errors.append(f"{shot_id} uses unsupported xAI wrapping tag <{wrapping}>.")
+        elif tag not in LUNA_WRAPPING_SPEECH_TAGS:
+            errors.append(f"{shot_id} uses <{wrapping}>, which is not approved for Luna tutorials.")
+        if closing:
+            if not wrapping_stack or wrapping_stack[-1] != tag:
+                errors.append(f"{shot_id} has an unbalanced closing speech tag </{wrapping}>.")
+            else:
+                wrapping_stack.pop()
+        else:
+            wrapping_stack.append(tag)
+    if wrapping_stack:
+        errors.append(f"{shot_id} has unclosed speech tags: " + ", ".join(wrapping_stack))
+    maximum_tags = max(2, len(spoken_tokens(tts_text)) // 25 + 1)
+    if tag_count > maximum_tags:
+        errors.append(
+            f"{shot_id} uses {tag_count} speech tags; the Luna limit for this line is {maximum_tags}."
+        )
+    return errors
+
+
 def media_identity(path: Path) -> dict:
     resolved = path.expanduser().resolve()
     stat = resolved.stat()
@@ -137,6 +293,22 @@ def xai_voice_provenance_errors(shot: dict, voiceover: Path) -> list[str]:
         errors.append(f"{shot_id} voice provenance is stale because the shot specification changed.")
     if metadata.get("narration_sha256") != narration_sha256(str(shot.get("narration", ""))):
         errors.append(f"{shot_id} voice provenance does not match the approved narration.")
+    performance = shot.get("voice_performance")
+    if isinstance(performance, dict):
+        if metadata.get("tts_text_sha256") != narration_sha256(tts_text_for_shot(shot)):
+            errors.append(f"{shot_id} voice provenance does not match the approved TTS performance text.")
+        try:
+            requested_speed = float(metadata.get("requested_speed"))
+            planned_speed = float(performance.get("speed"))
+            if abs(requested_speed - planned_speed) > 0.0001:
+                errors.append(f"{shot_id} voice provenance used a different planned speech speed.")
+        except (TypeError, ValueError):
+            errors.append(f"{shot_id} voice provenance has no valid planned speech speed.")
+        if metadata.get("voice_verified_at_generation") is not True:
+            errors.append(f"{shot_id} custom voice was not verified at generation time.")
+        cadence = metadata.get("cadence")
+        if not isinstance(cadence, dict) or cadence.get("within_target") is not True:
+            errors.append(f"{shot_id} generated cadence is outside the approved target range.")
     if not identity_matches(metadata.get("media_identity"), voiceover):
         errors.append(f"{shot_id} voice provenance does not match the current audio bytes.")
     return errors
@@ -246,6 +418,8 @@ def validate_shot_schema(shot: dict, index: int, schema_version: int = 2) -> lis
                 errors.append(f"{shot_id} must list non-empty {field}.")
         if not str(shot.get("creator_style_rationale", "")).strip():
             errors.append(f"{shot_id} is missing creator_style_rationale.")
+    if schema_version >= 4:
+        errors.extend(voice_performance_errors(shot, shot_id))
     return errors
 
 
