@@ -1,10 +1,12 @@
 import ast
+import asyncio
 import hashlib
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from array import array
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,6 +17,16 @@ sys.path.insert(0, str(SCRIPTS))
 
 import xai_voiceover as xai_voiceover_module  # noqa: E402
 from audit_creator_fidelity import audit_plan  # noqa: E402
+from audit_voice_delivery import (  # noqa: E402
+    DEFAULT_MODEL,
+    collect_response_text,
+    pcm_signal_metrics,
+    review_instructions,
+    signal_failures,
+    strict_verdict,
+    verdict_failures,
+    voice_delivery_audit_status,
+)
 from capture_window_storyboard import (  # noqa: E402
     build_parser,
     image_signal_stats,
@@ -26,12 +38,15 @@ from production_director import (  # noqa: E402
     creator_report_is_current,
     derive_status,
     manifest_final_path,
+    missing_required_outputs,
     report_is_fresh,
     transcriber_python,
 )
 from production_evidence import (  # noqa: E402
+    canonical_sha256,
     media_identity,
     narration_sha256,
+    sha256_bytes,
     shot_plan_spec_sha256,
     shot_spec_sha256,
     transcript_source_errors,
@@ -43,6 +58,26 @@ from production_evidence import (  # noqa: E402
 from verify_final_video import creator_fidelity_gate  # noqa: E402
 
 storyboard_parser = build_parser
+
+
+def passing_voice_delivery_verdict() -> dict:
+    return {
+        "natural_delivery": True,
+        "correct_pronunciation": True,
+        "no_clipped_words": True,
+        "no_stutter_or_duplicate": True,
+        "no_audio_artifacts": True,
+        "creator_cadence_match": True,
+        "speaker_identity_match": True,
+        "emotional_delivery_match": True,
+        "confident_verdict": True,
+        "issues": [],
+        "evidence": [
+            "The candidate keeps the same speaker timbre as the reference.",
+            "Every approved word is complete with clean joins and natural timing.",
+        ],
+        "summary": "The candidate audibly matches the reference and delivery contract.",
+    }
 
 
 def run_script(name: str, *args: str) -> subprocess.CompletedProcess:
@@ -270,11 +305,155 @@ def write_schema_three_director_job(job: Path) -> dict:
     return plan
 
 
+def write_ready_registered_voice(job: Path, plan: dict, registration_paths: dict) -> dict:
+    shot = plan["shots"][0]
+    shot_id = shot["id"]
+    voice = job / "voice" / f"{shot_id}.wav"
+    voice.write_bytes(b"exact generated voice bytes")
+    registration = registration_paths["registration"]
+    reference_hash = media_identity(registration_paths["reference"])["sha256"]
+    provenance = voice.with_suffix(".wav.xai.json")
+    provenance.write_text(
+        json.dumps(
+            {
+                "provider": "xai",
+                "voice_id": "abcd1234",
+                "shot_id": shot_id,
+                "shot_spec_sha256": shot_spec_sha256(shot),
+                "narration_sha256": narration_sha256(shot["narration"]),
+                "voice_registration_identity": media_identity(registration),
+                "voice_reference_download_verified_at_generation": True,
+                "voice_reference_sha256_at_generation": reference_hash,
+                "media_identity": media_identity(voice),
+            }
+        ),
+        encoding="utf-8",
+    )
+    transcript = job / "voice" / "transcripts" / shot_id / "transcript.json"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text(
+        json.dumps(
+            {
+                "source_media_identity": media_identity(voice),
+                "segments": [{"text": shot["narration"]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    entry = {
+        "id": shot_id,
+        "passed": True,
+        "shot_spec_sha256": shot_spec_sha256(shot),
+        "narration_sha256": narration_sha256(shot["narration"]),
+        "voiceover_identity": media_identity(voice),
+        "transcript_identity": media_identity(transcript),
+        "actual_text": shot["narration"],
+    }
+    transcript_audit = job / "qa" / "voiceover_audit.json"
+    transcript_audit.write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
+                "shots": [entry],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "shot": shot,
+        "voice": voice,
+        "provenance": provenance,
+        "transcript": transcript,
+        "transcript_audit": transcript_audit,
+        "transcript_entry": entry,
+        "registration": registration,
+        "reference": registration_paths["reference"],
+    }
+
+
+def write_voice_delivery_report(
+    job: Path,
+    plan: dict,
+    evidence: dict,
+    status: str = "passed",
+    dry_run: bool = False,
+) -> Path:
+    verdict = passing_voice_delivery_verdict()
+    if status == "failed":
+        verdict["natural_delivery"] = False
+        verdict["issues"] = ["The candidate has an awkward pause before the final phrase."]
+    response = json.dumps(verdict, separators=(",", ":")) if status != "inconclusive" else None
+    errors = verdict_failures(verdict) if status == "failed" else []
+    if status == "inconclusive":
+        errors = ["TimeoutError: bounded fixture timeout"]
+    report = {
+        "schema_version": 1,
+        "kind": "voice_delivery_audit",
+        "provider": "xai",
+        "model": DEFAULT_MODEL,
+        "dry_run": dry_run,
+        "shot_id": evidence["shot"]["id"],
+        "shot_plan_identity": media_identity(job / "plans" / "shot_plan.json"),
+        "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
+        "shot_spec_sha256": shot_spec_sha256(evidence["shot"]),
+        "narration_sha256": narration_sha256(evidence["shot"]["narration"]),
+        "voice_id": "abcd1234",
+        "voiceover_identity": media_identity(evidence["voice"]),
+        "voice_provenance_identity": media_identity(evidence["provenance"]),
+        "voice_registration_identity": media_identity(evidence["registration"]),
+        "reference_identity": media_identity(evidence["reference"]),
+        "reference_sample": {
+            "start_seconds": 1.0,
+            "duration_seconds": 18.0,
+            "format": "pcm_s16le_mono_24000hz",
+            "pcm_sha256": "a" * 64,
+        },
+        "transcript_identity": media_identity(evidence["transcript"]),
+        "transcript_audit_identity_at_review": media_identity(
+            evidence["transcript_audit"]
+        ),
+        "transcript_audit_entry_sha256": canonical_sha256(
+            evidence["transcript_entry"]
+        ),
+        "review_contract_sha256": sha256_bytes(
+            review_instructions(evidence["shot"], evidence["transcript_entry"]).encode()
+        ),
+        "candidate_signal": {
+            "duration_seconds": 1.0,
+            "peak_dbfs": -6.0,
+            "rms_dbfs": -20.0,
+            "dc_offset_fraction": 0.0,
+            "clipped_sample_count": 0,
+            "severe_step_count": 0,
+            "leading_silence_seconds": 0.1,
+            "trailing_silence_seconds": 0.1,
+            "longest_internal_silence_seconds": 0.2,
+        },
+        "deterministic_signal_errors": [],
+        "attempts": [{"attempt": 1, "parsed": status != "inconclusive"}],
+        "status": status,
+        "passed": status == "passed",
+        "verdict": verdict if response is not None else None,
+        "model_response": response,
+        "model_response_sha256": sha256_bytes(response.encode()) if response else None,
+        "errors": errors,
+    }
+    path = job / "qa" / "voice_delivery" / f"{evidence['shot']['id']}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report), encoding="utf-8")
+    return path
+
+
 class CompatibilityTests(unittest.TestCase):
     def test_python_scripts_parse_with_python_310_grammar(self):
         for script in SCRIPTS.glob("*.py"):
             with self.subTest(script=script.name):
                 ast.parse(script.read_text(encoding="utf-8"), filename=str(script), feature_version=(3, 10))
+
+    def test_windows_setup_installs_pinned_grok_audio_dependency(self):
+        setup = (SCRIPTS / "setup_windows.ps1").read_text(encoding="utf-8")
+        self.assertIn("websockets==15.0.1", setup)
 
 
 class ProductionEvidenceTests(unittest.TestCase):
@@ -644,7 +823,301 @@ class ProductionEvidenceTests(unittest.TestCase):
             self.assertTrue(Path(sealed["evidence"][0]["frame"]).is_file())
 
 
+class VoiceDeliveryAuditTests(unittest.TestCase):
+    def test_deterministic_signal_gate_rejects_clipping_and_long_dead_air(self):
+        clean = array("h", [0, 500, -500, 800, -800] * 2400).tobytes()
+        self.assertEqual(signal_failures(pcm_signal_metrics(clean)), [])
+
+        clipped = array("h", [32767] * 24000).tobytes()
+        failures = signal_failures(pcm_signal_metrics(clipped))
+        self.assertTrue(any("clipped PCM" in error for error in failures))
+        self.assertTrue(any("DC offset" in error for error in failures))
+
+    def test_strict_verdict_accepts_plain_or_fenced_json_and_rejects_uncertainty(self):
+        verdict = passing_voice_delivery_verdict()
+        encoded = json.dumps(verdict)
+        self.assertEqual(strict_verdict(encoded), verdict)
+        self.assertEqual(strict_verdict(f"```json\n{encoded}\n```"), verdict)
+
+        uncertain = dict(verdict)
+        uncertain["confident_verdict"] = False
+        uncertain["issues"] = ["The identity comparison is not confident enough to approve."]
+        self.assertTrue(verdict_failures(strict_verdict(json.dumps(uncertain))))
+
+        malformed = dict(verdict)
+        malformed.pop("speaker_identity_match")
+        with self.assertRaisesRegex(ValueError, "missing fields"):
+            strict_verdict(json.dumps(malformed))
+        with self.assertRaisesRegex(ValueError, "not valid JSON"):
+            strict_verdict("Here is the verdict: " + encoded)
+
+    def test_realtime_collector_avoids_alias_duplication_and_has_transcript_fallback(self):
+        class FakeWebSocket:
+            def __init__(self, events):
+                self.events = list(events)
+
+            async def recv(self):
+                return json.dumps(self.events.pop(0))
+
+        preferred = FakeWebSocket(
+            [
+                {"type": "response.text.delta", "delta": "duplicate alias"},
+                {"type": "response.output_text.delta", "delta": "exact JSON"},
+                {"type": "response.done", "response": {"status": "completed"}},
+            ]
+        )
+        self.assertEqual(asyncio.run(collect_response_text(preferred, 1)), "exact JSON")
+
+        fallback = FakeWebSocket(
+            [
+                {
+                    "type": "response.output_audio_transcript.delta",
+                    "delta": "fallback transcript",
+                },
+                {"type": "response.done", "response": {"status": "completed"}},
+            ]
+        )
+        self.assertEqual(
+            asyncio.run(collect_response_text(fallback, 1)),
+            "fallback transcript",
+        )
+
+        failed = FakeWebSocket(
+            [{"type": "error", "error": {"message": "fixture failure"}}]
+        )
+        with self.assertRaisesRegex(RuntimeError, "fixture failure"):
+            asyncio.run(collect_response_text(failed, 1))
+
+    def test_delivery_report_is_bound_to_exact_audio_and_dry_runs_never_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary)
+            plan = write_schema_three_director_job(job)
+            registration = write_voice_registration_fixture(job)
+            evidence = write_ready_registered_voice(job, plan, registration)
+            report = write_voice_delivery_report(job, plan, evidence)
+            status = voice_delivery_audit_status(
+                report,
+                plan,
+                evidence["shot"],
+                evidence["voice"],
+                evidence["transcript_audit"],
+                evidence["registration"],
+            )
+            self.assertEqual(status["outcome"], "passed", status["errors"])
+
+            write_voice_delivery_report(job, plan, evidence, dry_run=True)
+            dry_run = voice_delivery_audit_status(
+                report,
+                plan,
+                evidence["shot"],
+                evidence["voice"],
+                evidence["transcript_audit"],
+                evidence["registration"],
+            )
+            self.assertEqual(dry_run["outcome"], "stale")
+            self.assertTrue(any("Dry-run" in error for error in dry_run["errors"]))
+
+            write_voice_delivery_report(job, plan, evidence)
+            evidence["voice"].write_bytes(b"changed after Grok listened")
+            changed = voice_delivery_audit_status(
+                report,
+                plan,
+                evidence["shot"],
+                evidence["voice"],
+                evidence["transcript_audit"],
+                evidence["registration"],
+            )
+            self.assertEqual(changed["outcome"], "stale")
+            self.assertTrue(any("different voiceover bytes" in error for error in changed["errors"]))
+
+    def test_model_sealer_requires_current_passing_audit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary)
+            plan = write_schema_three_director_job(job)
+            registration = write_voice_registration_fixture(job)
+            evidence = write_ready_registered_voice(job, plan, registration)
+            delivery = write_voice_delivery_report(job, plan, evidence)
+            output = job / "qa" / "reviews" / "voice" / "shot-001.json"
+            sealed = run_script(
+                "seal_production_review.py",
+                "voice-model",
+                "--shot-plan",
+                str(job / "plans" / "shot_plan.json"),
+                "--shot-id",
+                "shot-001",
+                "--voiceover",
+                str(evidence["voice"]),
+                "--transcript-audit",
+                str(evidence["transcript_audit"]),
+                "--delivery-audit",
+                str(delivery),
+                "--voice-registration",
+                str(evidence["registration"]),
+                "--output",
+                str(output),
+            )
+            self.assertEqual(sealed.returncode, 0, sealed.stdout + sealed.stderr)
+            review = json.loads(output.read_text())
+            self.assertEqual(review["reviewer"]["kind"], "xai_audio_model")
+            self.assertEqual(
+                validate_sealed_review(
+                    review,
+                    "voice",
+                    evidence["shot"],
+                    evidence["voice"],
+                ),
+                [],
+            )
+
+            write_voice_delivery_report(job, plan, evidence, status="failed")
+            invalidated = validate_sealed_review(
+                review,
+                "voice",
+                evidence["shot"],
+                evidence["voice"],
+            )
+            self.assertTrue(any("stale audit bytes" in error for error in invalidated))
+            refused = run_script(
+                "seal_production_review.py",
+                "voice-model",
+                "--shot-plan",
+                str(job / "plans" / "shot_plan.json"),
+                "--shot-id",
+                "shot-001",
+                "--voiceover",
+                str(evidence["voice"]),
+                "--transcript-audit",
+                str(evidence["transcript_audit"]),
+                "--delivery-audit",
+                str(delivery),
+                "--voice-registration",
+                str(evidence["registration"]),
+                "--output",
+                str(output),
+            )
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("cannot be sealed", refused.stderr)
+
+    def test_dry_run_decodes_exact_media_but_cannot_create_passing_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary)
+            plan = write_schema_three_director_job(job)
+            paths = write_voice_registration_fixture(job)
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=220:duration=4",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "24000",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(paths["reference"]),
+                ],
+                check=True,
+            )
+            review = json.loads(paths["review"].read_text())
+            review["reference_identity"] = media_identity(paths["reference"])
+            paths["review"].write_text(json.dumps(review), encoding="utf-8")
+            registration = json.loads(paths["registration"].read_text())
+            registration["reference_identity"] = media_identity(paths["reference"])
+            registration["reference_review_identity"] = media_identity(paths["review"])
+            registration["downloaded_reference_sha256"] = media_identity(
+                paths["reference"]
+            )["sha256"]
+            paths["registration"].write_text(json.dumps(registration), encoding="utf-8")
+
+            evidence = write_ready_registered_voice(job, plan, paths)
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=330:duration=1.2",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "24000",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(evidence["voice"]),
+                ],
+                check=True,
+            )
+            provenance = json.loads(evidence["provenance"].read_text())
+            provenance["media_identity"] = media_identity(evidence["voice"])
+            evidence["provenance"].write_text(json.dumps(provenance), encoding="utf-8")
+            evidence["transcript"].write_text(
+                json.dumps(
+                    {
+                        "source_media_identity": media_identity(evidence["voice"]),
+                        "segments": [{"text": evidence["shot"]["narration"]}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            entry = evidence["transcript_entry"]
+            entry["voiceover_identity"] = media_identity(evidence["voice"])
+            entry["transcript_identity"] = media_identity(evidence["transcript"])
+            evidence["transcript_audit"].write_text(
+                json.dumps(
+                    {
+                        "passed": True,
+                        "shot_plan_spec_sha256": shot_plan_spec_sha256(plan),
+                        "shots": [entry],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = job / "qa" / "voice_delivery" / "shot-001.json"
+            result = run_script(
+                "audit_voice_delivery.py",
+                "--shot-plan",
+                str(job / "plans" / "shot_plan.json"),
+                "--shot-id",
+                "shot-001",
+                "--voiceover",
+                str(evidence["voice"]),
+                "--transcript-audit",
+                str(evidence["transcript_audit"]),
+                "--voice-registration",
+                str(evidence["registration"]),
+                "--reference-seconds",
+                "3",
+                "--dry-run",
+                "--report",
+                str(report),
+            )
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            payload = json.loads(report.read_text())
+            self.assertTrue(payload["dry_run"])
+            self.assertFalse(payload["passed"])
+            self.assertRegex(payload["reference_sample"]["pcm_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(payload["candidate_pcm_sha256"], r"^[0-9a-f]{64}$")
+
+
 class ProductionDirectorTests(unittest.TestCase):
+    def test_automatic_action_cannot_succeed_without_its_required_evidence_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            expected = Path(temporary) / "audit.json"
+            action = {"required_outputs": [str(expected)]}
+            self.assertEqual(missing_required_outputs(action), [str(expected)])
+            expected.write_text("{}", encoding="utf-8")
+            self.assertEqual(missing_required_outputs(action), [])
+
     def test_schema_three_requires_exact_owner_reference_chain(self):
         with tempfile.TemporaryDirectory() as temporary:
             job = Path(temporary)
@@ -704,6 +1177,81 @@ class ProductionDirectorTests(unittest.TestCase):
                 paths["registration"].resolve(),
             )
             self.assertEqual(command[command.index("--shot-id") + 1], "shot-001")
+
+    def test_director_runs_grok_audio_audit_then_seals_passing_exact_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary)
+            plan = write_schema_three_director_job(job)
+            registration = write_voice_registration_fixture(job)
+            evidence = write_ready_registered_voice(job, plan, registration)
+            patches = (
+                patch(
+                    "production_director.validate_review_evidence",
+                    return_value=({}, [], []),
+                ),
+                patch("production_director.transcriber_python", return_value=Path(sys.executable)),
+                patch("production_director.python_module_available", return_value=True),
+                patch.dict("os.environ", {"XAI_API_KEY": "test-key"}, clear=True),
+            )
+            with patches[0], patches[1], patches[2], patches[3]:
+                missing = derive_status(job)
+            self.assertEqual(missing["next"]["action"], "audit_grok_voice_delivery")
+            self.assertEqual(
+                missing["next"]["command"][
+                    missing["next"]["command"].index("--model") + 1
+                ],
+                DEFAULT_MODEL,
+            )
+
+            write_voice_delivery_report(job, plan, evidence)
+            with (
+                patch(
+                    "production_director.validate_review_evidence",
+                    return_value=({}, [], []),
+                ),
+                patch.dict("os.environ", {"XAI_API_KEY": "test-key"}, clear=True),
+            ):
+                passing = derive_status(job)
+            self.assertEqual(passing["next"]["action"], "seal_grok_voice_review")
+            self.assertIn("voice-model", passing["next"]["command"])
+
+    def test_director_repairs_failed_grok_delivery_and_keeps_human_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary)
+            plan = write_schema_three_director_job(job)
+            registration = write_voice_registration_fixture(job)
+            evidence = write_ready_registered_voice(job, plan, registration)
+            write_voice_delivery_report(job, plan, evidence, status="failed")
+            with (
+                patch(
+                    "production_director.validate_review_evidence",
+                    return_value=({}, [], []),
+                ),
+                patch.dict("os.environ", {"XAI_API_KEY": "test-key"}, clear=True),
+            ):
+                failed = derive_status(job)
+            self.assertEqual(failed["next"]["action"], "repair_failed_voice_delivery")
+            self.assertTrue(
+                any("awkward pause" in error for error in failed["next"]["errors"])
+            )
+
+            write_voice_delivery_report(job, plan, evidence, status="inconclusive")
+            with (
+                patch(
+                    "production_director.validate_review_evidence",
+                    return_value=({}, [], []),
+                ),
+                patch.dict("os.environ", {"XAI_API_KEY": "test-key"}, clear=True),
+            ):
+                inconclusive = derive_status(job)
+            self.assertEqual(
+                inconclusive["next"]["action"],
+                "listen_and_seal_voice_review",
+            )
+            self.assertEqual(
+                inconclusive["next"]["automated_review"]["outcome"],
+                "inconclusive",
+            )
 
     def test_accepted_delivery_must_equal_the_current_qa_candidate(self):
         with tempfile.TemporaryDirectory() as temporary:

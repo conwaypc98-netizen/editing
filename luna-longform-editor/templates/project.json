@@ -29,6 +29,7 @@
     "voice_id_env": "XAI_VOICE_ID",
     "owner_consent": "required",
     "language": "en",
+    "delivery_audit_model": "grok-voice-think-fast-2.0",
     "reference": {
       "audio": "voice/owner-reference.wav",
       "preparation_report": "voice/owner-reference-report.json",

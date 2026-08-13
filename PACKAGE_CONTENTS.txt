@@ -17,7 +17,7 @@ Included:
 - luna-longform-editor/scripts/*.ps1
 - Resumable production director with immutable shot/media evidence sidecars
 - Confidence-gated creator-twin profile, schema-v4 claim/voice-performance contracts, and plan/final fidelity audits
-- Consent-gated xAI voice-reference preparation with exact-byte upload seal, source-audio hash registration, live pre-generation recheck, retry, timestamps, and per-shot audits
+- Consent-gated xAI voice-reference preparation with exact-byte upload seal, source-audio hash registration, live pre-generation recheck, retry, timestamps, transcript comparison, and exact-reference Grok audio listening
 - Cross-platform desktop recorder plus macOS/Windows exact-window state-storyboard capture fallback with blank-frame rejection
 - tests/test_editor_system.py
 - Install-Windows.ps1

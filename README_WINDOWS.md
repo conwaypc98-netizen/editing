@@ -8,7 +8,7 @@ This folder contains the full `luna-longform-editor` Codex skill, including the 
 - Python 3.10 or newer.
 - FFmpeg and FFprobe in PATH.
 
-The setup script creates the local transcription environment and installs `faster-whisper`. It can also try to install FFmpeg with `winget`.
+The setup script creates the local tool environment and installs `faster-whisper` plus the pinned WebSocket client used for Grok audio listening. It can also try to install FFmpeg with `winget`.
 
 ## Install
 
@@ -43,10 +43,10 @@ Use the luna-longform-editor skill to edit "C:\path\to\my raw video.mov". Create
 To have Codex record and narrate the tutorial instead of you:
 
 ```text
-Use the luna-longform-editor skill in synthetic mode for this topic: <topic>. Write a schema-version 3 project and schema-version 4 script/shot plan with a spoken-claim-to-visible-evidence contract, capture checkpoints, retake triggers, creator-style rationale, and an evidence-bound voice-performance contract for every shot. Validate it and pass the creator-fidelity plan audit, then keep resuming the job with production_director.py --execute-safe. Register my verified xAI custom voice against the exact reviewed source WAV, record each Windows desktop shot, inspect the actual captured pixels, seal exact-media recording and voice reviews, generate only missing or stale narration, and do not accept the final until the adversarial creator-fidelity, visual, transcript, plan, zoom, loudness, and decode gates all pass.
+Use the luna-longform-editor skill in synthetic mode for this topic: <topic>. Write a schema-version 3 project and schema-version 4 script/shot plan with a spoken-claim-to-visible-evidence contract, capture checkpoints, retake triggers, creator-style rationale, and an evidence-bound voice-performance contract for every shot. Validate it and pass the creator-fidelity plan audit, then keep resuming the job with production_director.py --execute-safe. Register my verified xAI custom voice against the exact reviewed source WAV, generate only missing or stale narration, and require Grok to audibly compare each exact candidate against an exact excerpt of that registered owner reference. Automatically seal only strict, confident, evidence-backed passes; repair concrete defects and use a real human fallback for inconclusive reviews. Record each Windows desktop shot, inspect the actual captured pixels, seal exact-media recording reviews, and do not accept the final until the adversarial creator-fidelity, visual, transcript, plan, zoom, loudness, and decode gates all pass.
 ```
 
-Create your own custom voice once in the xAI console, then set `XAI_API_KEY` and `XAI_VOICE_ID` in the environment visible to Codex. Direct API creation is restricted to enabled Enterprise teams. Before upload, the skill requires a source-bound 24 kHz reference plus an exact-byte transcript/listening/privacy seal from `seal_voice_reference_review.py`. After upload, `xai_voiceover.py register` downloads xAI's stored source audio and refuses the voice unless its SHA-256 equals the reviewed WAV. The same source is rechecked before every real generation batch; a dry run never counts as production evidence.
+Create your own custom voice once in the xAI console, then set `XAI_API_KEY` and `XAI_VOICE_ID` in the environment visible to Codex. Direct API creation is restricted to enabled Enterprise teams. Before upload, the skill requires a source-bound 24 kHz reference plus an exact-byte human transcript/listening/privacy seal from `seal_voice_reference_review.py`. After upload, `xai_voiceover.py register` downloads xAI's stored source audio and refuses the voice unless its SHA-256 equals the reviewed WAV. The same source is rechecked before every real generation batch; a dry run never counts as production evidence. Per-shot Grok listening sends the generated narration and a short excerpt of that reviewed reference to xAI and incurs normal API usage.
 
 If the skill is not installed yet, start with:
 
@@ -86,7 +86,7 @@ Resume an autonomous job:
 python .\luna-longform-editor\scripts\production_director.py --job "C:\path\to\job" --execute-safe
 ```
 
-The director runs safe deterministic stages and stops when Codex must inspect/listen/operate/repair something. It automatically invalidates creator audits when the script, profile, or exact final transcript changes. Complete the evidence-backed action and run the same command again. Reviews are sealed sidecar files; never add passing review flags to `shot_plan.json`.
+The director runs safe deterministic stages and stops when Codex must inspect, operate, repair, or resolve an inconclusive listening result. It automatically installs the isolated Grok WebSocket dependency when needed and invalidates creator/audio evidence when bound inputs change. Complete the evidence-backed action and run the same command again. Reviews are sealed sidecar files; never add passing review flags to `shot_plan.json`.
 
 List the screen recorder help:
 

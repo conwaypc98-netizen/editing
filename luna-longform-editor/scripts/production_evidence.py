@@ -562,6 +562,170 @@ def validate_shot_plan(plan: dict, project: dict) -> dict:
     }
 
 
+def automated_voice_review_errors(review: dict, shot: dict, media: Path) -> list[str]:
+    """Validate that a model-sealed review comes from current, real audio evidence."""
+    shot_id = str(shot.get("id", "unknown"))
+    reviewer = review.get("reviewer")
+    if not isinstance(reviewer, dict) or reviewer.get("kind") != "xai_audio_model":
+        return []
+    errors = []
+    if reviewer.get("provider") != "xai" or not str(reviewer.get("model", "")).strip():
+        errors.append(f"{shot_id} automated voice reviewer metadata is incomplete.")
+    audit_identity = review.get("delivery_audit_identity")
+    audit_path = (
+        Path(str(audit_identity.get("path", ""))).expanduser()
+        if isinstance(audit_identity, dict)
+        else None
+    )
+    if audit_path is None or not identity_matches(audit_identity, audit_path):
+        return errors + [f"{shot_id} automated voice review has missing or stale audit bytes."]
+    try:
+        audit = read_json(audit_path)
+    except (json.JSONDecodeError, OSError) as error:
+        return errors + [f"{shot_id} automated voice audit is unreadable: {error}"]
+    if audit.get("kind") != "voice_delivery_audit" or audit.get("provider") != "xai":
+        errors.append(f"{shot_id} automated voice audit is not an xAI delivery audit.")
+    if audit.get("dry_run") is not False:
+        errors.append(f"{shot_id} automated voice audit is a dry run.")
+    if audit.get("status") != "passed" or audit.get("passed") is not True:
+        errors.append(f"{shot_id} automated voice audit is not passing.")
+    if not isinstance(audit.get("candidate_signal"), dict):
+        errors.append(f"{shot_id} automated voice audit has no deterministic signal metrics.")
+    if audit.get("deterministic_signal_errors") != []:
+        errors.append(f"{shot_id} automated voice audit has deterministic signal failures.")
+    if audit.get("model") != reviewer.get("model"):
+        errors.append(f"{shot_id} automated reviewer model does not match its audit.")
+    if audit.get("shot_id") != shot_id:
+        errors.append(f"{shot_id} automated voice audit belongs to another shot.")
+    if audit.get("shot_spec_sha256") != shot_spec_sha256(shot):
+        errors.append(f"{shot_id} automated voice audit has a stale shot specification.")
+    if audit.get("narration_sha256") != narration_sha256(str(shot.get("narration", ""))):
+        errors.append(f"{shot_id} automated voice audit has different approved narration.")
+    if not identity_matches(audit.get("voiceover_identity"), media):
+        errors.append(f"{shot_id} automated voice audit belongs to different audio bytes.")
+
+    response = audit.get("model_response")
+    if not isinstance(response, str) or not response.strip():
+        errors.append(f"{shot_id} automated voice audit has no exact model response.")
+    elif audit.get("model_response_sha256") != sha256_bytes(response.encode("utf-8")):
+        errors.append(f"{shot_id} automated voice audit response changed after review.")
+    verdict = audit.get("verdict")
+    required_model_verdicts = (
+        "natural_delivery",
+        "correct_pronunciation",
+        "no_clipped_words",
+        "no_stutter_or_duplicate",
+        "no_audio_artifacts",
+        "creator_cadence_match",
+        "speaker_identity_match",
+        "emotional_delivery_match",
+        "confident_verdict",
+    )
+    if not isinstance(verdict, dict):
+        errors.append(f"{shot_id} automated voice audit has no structured verdict.")
+        verdict = {}
+    for field in required_model_verdicts:
+        if verdict.get(field) is not True:
+            errors.append(f"{shot_id} automated voice verdict {field} is not true.")
+    if verdict.get("issues") != []:
+        errors.append(f"{shot_id} automated voice audit contains unresolved issues.")
+    if not isinstance(verdict.get("evidence"), list) or len(verdict.get("evidence", [])) < 2:
+        errors.append(f"{shot_id} automated voice audit lacks concrete audible evidence.")
+
+    registration_identity = audit.get("voice_registration_identity")
+    registration_path = (
+        Path(str(registration_identity.get("path", ""))).expanduser()
+        if isinstance(registration_identity, dict)
+        else None
+    )
+    if registration_path is None or not identity_matches(
+        registration_identity, registration_path
+    ):
+        errors.append(f"{shot_id} automated voice audit has stale xAI registration evidence.")
+        registration = {}
+    else:
+        try:
+            registration = read_json(registration_path)
+        except (json.JSONDecodeError, OSError) as error:
+            registration = {}
+            errors.append(f"{shot_id} xAI voice registration is unreadable: {error}")
+        errors.extend(
+            f"{shot_id} automated voice audit: {error}"
+            for error in voice_registration_errors(
+                registration_path,
+                str(audit.get("voice_id", "")) or None,
+            )
+        )
+    if audit.get("reference_identity") != registration.get("reference_identity"):
+        errors.append(f"{shot_id} automated voice audit used a different identity reference.")
+    reference_identity = audit.get("reference_identity")
+    reference_path = (
+        Path(str(reference_identity.get("path", ""))).expanduser()
+        if isinstance(reference_identity, dict)
+        else None
+    )
+    if reference_path is None or not identity_matches(reference_identity, reference_path):
+        errors.append(f"{shot_id} automated voice audit identity reference is stale.")
+    sample = audit.get("reference_sample")
+    if not isinstance(sample, dict) or not re.fullmatch(
+        r"[0-9a-f]{64}", str(sample.get("pcm_sha256", ""))
+    ):
+        errors.append(f"{shot_id} automated voice audit has no exact reference sample.")
+
+    transcript_identity = audit.get("transcript_identity")
+    transcript_path = (
+        Path(str(transcript_identity.get("path", ""))).expanduser()
+        if isinstance(transcript_identity, dict)
+        else None
+    )
+    if transcript_path is None or not identity_matches(transcript_identity, transcript_path):
+        errors.append(f"{shot_id} automated voice audit transcript bytes are stale.")
+    else:
+        errors.extend(
+            f"{shot_id} automated voice audit: {error}"
+            for error in transcript_source_errors(
+                transcript_path,
+                media,
+                require_identity=True,
+            )
+        )
+    provenance_identity = audit.get("voice_provenance_identity")
+    provenance_path = media.with_suffix(media.suffix + ".xai.json")
+    if not identity_matches(provenance_identity, provenance_path):
+        errors.append(f"{shot_id} automated voice audit generation provenance is stale.")
+    elif registration_path is not None:
+        errors.extend(
+            xai_voice_provenance_errors(
+                shot,
+                media,
+                expected_voice_id=str(audit.get("voice_id", "")) or None,
+                registration=registration_path,
+            )
+        )
+
+    expected_review_verdict = {
+        "pronunciation_clear": verdict.get("correct_pronunciation") is True
+        and verdict.get("no_clipped_words") is True,
+        "cadence_natural": verdict.get("natural_delivery") is True
+        and verdict.get("creator_cadence_match") is True
+        and verdict.get("no_stutter_or_duplicate") is True,
+        "no_audio_artifacts": verdict.get("no_audio_artifacts") is True
+        and verdict.get("no_clipped_words") is True,
+        "speaker_identity_match": verdict.get("speaker_identity_match") is True,
+        "emotional_delivery_match": verdict.get("emotional_delivery_match") is True,
+    }
+    sealed_verdict = review.get("verdict")
+    if not isinstance(sealed_verdict, dict):
+        errors.append(f"{shot_id} automated voice review has no sealed verdict.")
+    else:
+        for field, expected in expected_review_verdict.items():
+            if sealed_verdict.get(field) is not expected:
+                errors.append(
+                    f"{shot_id} automated sealed verdict {field} disagrees with its audit."
+                )
+    return errors
+
+
 def validate_sealed_review(review: object, kind: str, shot: dict, media: Path) -> list[str]:
     errors = []
     shot_id = str(shot.get("id", "unknown"))
@@ -586,4 +750,6 @@ def validate_sealed_review(review: object, kind: str, shot: dict, media: Path) -
         errors.append(f"{shot_id} {kind} review needs concrete notes.")
     if kind == "recording" and not review.get("evidence"):
         errors.append(f"{shot_id} recording review has no extracted evidence frames.")
+    if kind == "voice":
+        errors.extend(automated_voice_review_errors(review, shot, media))
     return errors

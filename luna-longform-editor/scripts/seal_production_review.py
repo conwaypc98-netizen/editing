@@ -6,6 +6,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from audit_voice_delivery import DEFAULT_MODEL, voice_delivery_audit_status
 from production_evidence import (
     VOICE_VERDICTS,
     identity_matches,
@@ -16,6 +17,7 @@ from production_evidence import (
     resolve_media,
     sha256_file,
     shot_spec_sha256,
+    validate_sealed_review,
     write_json,
 )
 
@@ -175,13 +177,89 @@ def seal_voice(args: argparse.Namespace) -> int:
     return 0 if report["passed"] else 1
 
 
+def seal_model_voice(args: argparse.Namespace) -> int:
+    plan_path = Path(args.shot_plan).expanduser().resolve()
+    plan, shot = load_shot(plan_path, args.shot_id)
+    voiceover = resolve_shot_media(shot, plan_path, args.voiceover, "voiceover")
+    transcript_audit = Path(args.transcript_audit).expanduser().resolve()
+    registration = Path(args.voice_registration).expanduser().resolve()
+    delivery_audit = Path(args.delivery_audit).expanduser().resolve()
+    status = voice_delivery_audit_status(
+        delivery_audit,
+        plan,
+        shot,
+        voiceover,
+        transcript_audit,
+        registration,
+        args.model,
+    )
+    if status.get("outcome") != "passed":
+        errors = status.get("errors", [])
+        raise SystemExit(
+            "Automated voice review cannot be sealed:\n- "
+            + "\n- ".join(str(error) for error in errors or ["audit is not passing"])
+        )
+    audit = status["report"]
+    model_verdict = status["verdict"]
+    evidence = [str(item).strip() for item in model_verdict.get("evidence", [])]
+    notes = (
+        f"Grok audio comparison ({args.model}): {model_verdict['summary'].strip()} "
+        "Audible evidence: "
+        + " | ".join(evidence)
+    )
+    verdict = {
+        "pronunciation_clear": model_verdict["correct_pronunciation"]
+        and model_verdict["no_clipped_words"],
+        "cadence_natural": model_verdict["natural_delivery"]
+        and model_verdict["creator_cadence_match"]
+        and model_verdict["no_stutter_or_duplicate"],
+        "no_audio_artifacts": model_verdict["no_audio_artifacts"]
+        and model_verdict["no_clipped_words"],
+        "speaker_identity_match": model_verdict["speaker_identity_match"],
+        "emotional_delivery_match": model_verdict["emotional_delivery_match"],
+        "notes": notes,
+    }
+    report = {
+        "schema_version": 2,
+        "kind": "voice_review",
+        "reviewer": {
+            "kind": "xai_audio_model",
+            "provider": "xai",
+            "model": args.model,
+            "human_review": False,
+        },
+        "shot_id": args.shot_id,
+        "shot_spec_sha256": shot_spec_sha256(shot),
+        "narration_sha256": narration_sha256(str(shot.get("narration", ""))),
+        "media_identity": media_identity(voiceover),
+        "delivery_audit_identity": media_identity(delivery_audit),
+        "voice_registration_identity": audit.get("voice_registration_identity"),
+        "reference_identity": audit.get("reference_identity"),
+        "transcript_identity": audit.get("transcript_identity"),
+        "verdict": verdict,
+        "errors": [],
+        "passed": True,
+        "reviewed_at": now_iso(),
+    }
+    validation_errors = validate_sealed_review(report, "voice", shot, voiceover)
+    if validation_errors:
+        raise SystemExit(
+            "Automated voice review failed its own exact-evidence validation:\n- "
+            + "\n- ".join(validation_errors)
+        )
+    output = Path(args.output).expanduser().resolve()
+    write_json(output, report)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def add_boolean_flag(parser: argparse.ArgumentParser, name: str) -> None:
     parser.add_argument(f"--{name.replace('_', '-')}", action="store_true")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Seal media-hash-bound human/Codex reviews for autonomous Luna shots."
+        description="Seal media-hash-bound human or evidence-backed model reviews for Luna shots."
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -212,6 +290,17 @@ def main() -> int:
     voice.add_argument("--notes", required=True)
     voice.add_argument("--output", required=True)
     voice.set_defaults(func=seal_voice)
+
+    model_voice = sub.add_parser("voice-model")
+    model_voice.add_argument("--shot-plan", required=True)
+    model_voice.add_argument("--shot-id", required=True)
+    model_voice.add_argument("--voiceover")
+    model_voice.add_argument("--transcript-audit", required=True)
+    model_voice.add_argument("--delivery-audit", required=True)
+    model_voice.add_argument("--voice-registration", required=True)
+    model_voice.add_argument("--model", default=DEFAULT_MODEL)
+    model_voice.add_argument("--output", required=True)
+    model_voice.set_defaults(func=seal_model_voice)
 
     args = parser.parse_args()
     return args.func(args)

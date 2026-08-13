@@ -79,9 +79,9 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
     & $python.Exe @venvArgs
 }
 
-Write-Host "Installing transcription dependencies..."
+Write-Host "Installing transcription and Grok audio-review dependencies..."
 & $venvPython -m pip install --upgrade pip wheel setuptools
-& $venvPython -m pip install --upgrade faster-whisper
+& $venvPython -m pip install --upgrade faster-whisper websockets==15.0.1
 
 Write-Host ""
 Write-Host "Windows setup complete."

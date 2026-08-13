@@ -5,7 +5,7 @@ Portable Codex skill for evidence-driven Luna Tweak video production on macOS an
 It supports two workflows:
 
 - Intelligent editing of an existing recording using transcript, frame, duplicate-take, continuity, waveform, and rendered-output evidence.
-- Autonomous production where Codex writes a shot plan, records each desktop demonstration, generates per-shot narration with a verified xAI custom voice, assembles the shots, and refuses delivery until technical, speech, plan, and visual review gates pass.
+- Autonomous production where Codex writes a shot plan, records each desktop demonstration, generates per-shot narration with a verified xAI custom voice, has Grok audibly compare each take with the exact registered owner reference, assembles the shots, and refuses delivery until technical, speech, plan, and visual review gates pass.
 
 This is deliberately not a silence remover. Every kept range must explain its story role, viewer purpose, take choice, continuity, and evidence. Final visual review is fail-closed: an unreviewed crop or timeline is not considered passing.
 
@@ -49,7 +49,7 @@ For autonomous recording, use:
 Use the luna-longform-editor skill in synthetic mode. Build a schema-version 3 project and schema-version 4 shot plan for this topic: <topic>, including claim-support mappings, capture checkpoints, retake triggers, creator-style rationales, and evidence-bound voice-performance contracts. Validate it and pass the creator-fidelity plan audit, then resume with production_director.py --execute-safe. Use Computer Use to produce each desktop shot, seal exact-media recording and voice reviews, register my verified xAI voice against the exact reviewed source WAV, and keep resuming until the rebuilt final passes the adversarial creator-fidelity, visual, transcript, loudness, decode, plan, and zoom gates. Never infer that a background app was captured; inspect the actual pixels and retake or use the macOS/Windows exact-window state-storyboard fallback.
 ```
 
-The one-time voice step is creating and verifying your own custom voice in the xAI console. Direct API creation is restricted to enabled Enterprise teams, so the package uses the console path instead of promising an unavailable free API workflow. After that, set `XAI_API_KEY` and `XAI_VOICE_ID`; the director downloads xAI's stored source audio, requires its SHA-256 to equal the exact human-reviewed WAV, and writes `voice/voice_registration.json`. It repeats that source-hash check before each real generation batch, generates only stale per-shot WAV/timestamp metadata, corrects measurable cadence when possible, transcribes each result, and still requires a real listening verdict. API keys are never stored in the repo.
+The one-time voice step is creating and verifying your own custom voice in the xAI console. Direct API creation is restricted to enabled Enterprise teams, so the package uses the console path instead of promising an unavailable free API workflow. After that, set `XAI_API_KEY` and `XAI_VOICE_ID`; the director downloads xAI's stored source audio, requires its SHA-256 to equal the exact human-reviewed WAV, and writes `voice/voice_registration.json`. It repeats that source-hash check before each real generation batch, generates only stale per-shot WAV/timestamp metadata, corrects measurable cadence when possible, and transcribes each result. For current xAI projects it then sends an exact registered-reference excerpt and the exact candidate to the pinned Grok Voice model for strict pronunciation, cadence, identity, emotion, clipping, stutter, and artifact review. Passing reports seal automatically; failed reports require a changed take, and inconclusive reports require a human fallback. This listening stage uses normal paid xAI API calls. API keys are never stored in the repo.
 
 An owner-consented reference from an accepted video can be prepared locally with:
 
@@ -86,6 +86,6 @@ See `PROMPT_FOR_CODEX_ON_WINDOWS.md` for the fuller prompt.
 - `Install-Windows.ps1`: root installer.
 - `README_WINDOWS.md`: Windows setup notes.
 - `PROMPT_FOR_CODEX_ON_WINDOWS.md`: copy/paste editing prompts.
-- `tests/`: regression tests for job isolation, cleanup safety, plan/media integrity, intro evidence, voice consent/audit, creator-fidelity learning, claim contracts, shot review, and final acceptance.
+- `tests/`: regression tests for job isolation, cleanup safety, plan/media integrity, intro evidence, voice consent, exact-reference Grok listening, creator-fidelity learning, claim contracts, shot review, and final acceptance.
 
 Raw videos, rendered outputs, transcripts, FFmpeg binaries, and Python virtual environments are intentionally not committed.

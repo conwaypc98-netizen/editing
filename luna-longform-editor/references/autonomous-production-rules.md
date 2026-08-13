@@ -24,7 +24,7 @@ Validate this immutable shot specification and run `audit_creator_fidelity.py pl
 
 Record shots separately. A failed or confusing shot is retaken; it is not hidden by narration. Generate cloned-voice narration per shot, then assemble only when the shot duration and narration duration are compatible.
 
-Run `production_director.py --job <job> --execute-safe` as the resume loop. It may automate validation, xAI generation, transcription, audits, assembly, zoom rendering, QA generation, and acceptance. It must stop for ownership/configuration, actual voice listening, Computer Use, exact visual review, or a failed adversarial gate. Completing one of those actions does not authorize inventing evidence for another.
+Run `production_director.py --job <job> --execute-safe` as the resume loop. It may automate validation, xAI generation, transcription, Grok audio listening, evidence sealing, assembly, zoom rendering, QA generation, and acceptance. It must stop for ownership/configuration, an inconclusive voice verdict, Computer Use, exact visual review, or a failed adversarial gate. Completing one of those actions does not authorize inventing evidence for another.
 
 ## Director Contract
 
@@ -72,9 +72,13 @@ The validator must reject plans that lack these fields. "It looked okay" is not 
 - Measure generated WPM against the shot contract, allow bounded automatic speed correction, and stop for direction changes if corrected delivery still misses the range.
 - Keep tags sparse and tutorial-appropriate. The tag-stripped words must exactly match the approved narration.
 - Listen or transcribe the synthesized narration before assembly. Reject mispronounced product names, unnatural emphasis, missing words, and cadence that does not match the channel profile.
-- Require both a passing transcript-comparison report and an explicit per-shot listening review before assembly.
+- After transcript comparison, use `audit_voice_delivery.py` for current xAI projects. Reject deterministic clipping, click-like jumps, DC offset, implausibly low level, and internal dead air before spending an API call. Send a deterministic excerpt from the exact registered owner reference as the first audio turn and the exact generated candidate as the second. Require strict, confident JSON grounded in concrete audible evidence. The reviewer must compare identity, pronunciation, complete words, stutters/duplicates, natural cadence, emotion, and audio integrity.
+- Bind each Grok report to the pinned model, shot specification, approved narration, exact voice/transcript/provenance/registration/reference bytes, exact model response, and exact reference-sample PCM hash. Dry runs and stale reports never pass.
+- A passing Grok verdict may be deterministically sealed as the per-shot voice review. A concrete defect requires changing the performance contract or take; do not regenerate unchanged settings. A transport failure, malformed response, uncertainty, or missing evidence requires a real human fallback.
+- Require both a passing transcript-comparison report and an explicit per-shot audible review before assembly.
 - Verify the configured xAI voice before synthesis. Preserve xAI timestamps and request metadata, retry only transient 429/500/503 failures with bounded exponential backoff, and never log the API key.
 - Treat changing a narration line or replacing its audio bytes as automatic invalidation of the listening verdict.
+- The automated delivery audit sends generated narration and a short owner-reference excerpt to xAI and incurs normal Voice API usage. Never send an unreviewed or non-consenting reference.
 
 ## Desktop Recording Rules
 

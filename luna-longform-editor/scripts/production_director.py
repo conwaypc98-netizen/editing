@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from audit_voice_delivery import DEFAULT_MODEL, voice_delivery_audit_status
 from production_evidence import (
     identity_matches,
     media_identity,
@@ -64,6 +65,17 @@ def transcriber_python() -> Path | None:
     return next((path.absolute() for path in candidates if path.is_file()), None)
 
 
+def python_module_available(python: Path, module: str) -> bool:
+    completed = subprocess.run(
+        [str(python), "-c", f"import {module}"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
 def report_is_fresh(report_path: Path, inputs: list[Path]) -> bool:
     if not report_path.is_file():
         return False
@@ -115,6 +127,13 @@ def agent_action(action: str, reason: str, **extra) -> dict:
         "automatic": False,
         **extra,
     }
+
+
+def missing_required_outputs(action: dict) -> list[str]:
+    outputs = action.get("required_outputs", [])
+    if not isinstance(outputs, list):
+        return ["<invalid required_outputs contract>"]
+    return [str(value) for value in outputs if not Path(str(value)).is_file()]
 
 
 def voice_transcript(job: Path, shot_id: str) -> Path | None:
@@ -683,15 +702,149 @@ def derive_status(job: Path) -> dict:
         xai_metadata_path = Path(voice).with_suffix(Path(voice).suffix + ".xai.json")
         xai_metadata = read_json(xai_metadata_path) if xai_metadata_path.is_file() else {}
         output = voice_review_dir / f"{shot_id}.json"
+        automated_status = None
+        automated_review_enabled = (
+            require_xai_provenance
+            and require_sealed_reference
+            and registration_path is not None
+        )
+        if automated_review_enabled:
+            review_model = str(
+                voice_config.get("delivery_audit_model", DEFAULT_MODEL)
+            ).strip() or DEFAULT_MODEL
+            delivery_audit = job / "qa" / "voice_delivery" / f"{shot_id}.json"
+            automated_status = voice_delivery_audit_status(
+                delivery_audit,
+                plan,
+                shot,
+                Path(voice),
+                audit_path,
+                registration_path,
+                review_model,
+            )
+            if automated_status["outcome"] == "stale":
+                if not os.environ.get("XAI_API_KEY"):
+                    result["stage"] = "voice_listening_review"
+                    result["next"] = agent_action(
+                        "configure_grok_audio_reviewer",
+                        "The generated narration is ready, but Grok needs XAI_API_KEY to hear the exact reference and candidate audio.",
+                        shot_id=shot_id,
+                        voiceover=voice,
+                        delivery_audit=str(delivery_audit),
+                    )
+                    return result
+                python = transcriber_python()
+                if python is None:
+                    result["stage"] = "voice_listening_review"
+                    result["next"] = agent_action(
+                        "install_voice_review_environment",
+                        "Grok audio review requires the Luna transcription environment.",
+                    )
+                    return result
+                if not python_module_available(python, "websockets"):
+                    result["stage"] = "voice_listening_review"
+                    result["next"] = command_action(
+                        "install_grok_audio_review_dependency",
+                        "Install the pinned WebSocket client into Luna's isolated tool environment.",
+                        [
+                            str(python),
+                            "-m",
+                            "pip",
+                            "install",
+                            "websockets==15.0.1",
+                        ],
+                    )
+                    return result
+                result["stage"] = "voice_listening_review"
+                result["next"] = command_action(
+                    "audit_grok_voice_delivery",
+                    "Grok must hear the exact registered owner-reference excerpt and exact generated shot before assembly.",
+                    [
+                        str(python),
+                        str(SCRIPT_DIR / "audit_voice_delivery.py"),
+                        "--shot-plan",
+                        str(plan_path),
+                        "--shot-id",
+                        shot_id,
+                        "--voiceover",
+                        voice,
+                        "--transcript-audit",
+                        str(audit_path),
+                        "--voice-registration",
+                        str(registration_path),
+                        "--model",
+                        review_model,
+                        "--report",
+                        str(delivery_audit),
+                    ],
+                    acceptable_return_codes=[0, 1],
+                    required_outputs=[str(delivery_audit)],
+                    stale_errors=automated_status.get("errors", []),
+                )
+                return result
+            if automated_status["outcome"] == "passed":
+                result["stage"] = "voice_listening_review"
+                result["next"] = command_action(
+                    "seal_grok_voice_review",
+                    "The exact Grok listening verdict passed; seal it against the current shot, audio, transcript, registration, and reference evidence.",
+                    [
+                        sys.executable,
+                        str(SCRIPT_DIR / "seal_production_review.py"),
+                        "voice-model",
+                        "--shot-plan",
+                        str(plan_path),
+                        "--shot-id",
+                        shot_id,
+                        "--voiceover",
+                        voice,
+                        "--transcript-audit",
+                        str(audit_path),
+                        "--delivery-audit",
+                        str(delivery_audit),
+                        "--voice-registration",
+                        str(registration_path),
+                        "--model",
+                        review_model,
+                        "--output",
+                        str(output),
+                    ],
+                )
+                return result
+            if automated_status["outcome"] == "failed":
+                result["stage"] = "voice_direction"
+                result["next"] = agent_action(
+                    "repair_failed_voice_delivery",
+                    "Grok heard a concrete delivery defect. Revise this shot's voice-performance contract from the evidence before regenerating it; do not retry unchanged settings.",
+                    shot_id=shot_id,
+                    voiceover=voice,
+                    errors=automated_status.get("errors", []),
+                    verdict=automated_status.get("verdict"),
+                    delivery_audit=str(delivery_audit),
+                    voice_performance=shot.get("voice_performance"),
+                )
+                return result
         result["stage"] = "voice_listening_review"
         result["next"] = agent_action(
             "listen_and_seal_voice_review",
-            "Transcript equality is not proof of natural delivery; this exact audio still needs a listening verdict.",
+            (
+                "Grok's bounded audio review was inconclusive, so this exact audio needs a real human listening verdict."
+                if automated_status is not None
+                else "Transcript equality is not proof of natural delivery; this exact audio still needs a listening verdict."
+            ),
             shot_id=shot_id,
             narration=shot.get("narration"),
             voiceover=voice,
             voice_performance=shot.get("voice_performance"),
             measured_cadence=xai_metadata.get("cadence"),
+            automated_review=(
+                {
+                    "outcome": automated_status.get("outcome"),
+                    "errors": automated_status.get("errors", []),
+                    "report": str(job / "qa" / "voice_delivery" / f"{shot_id}.json"),
+                }
+                if automated_status is not None
+                else None
+            ),
             seal_command=[
                 sys.executable,
                 str(SCRIPT_DIR / "seal_production_review.py"),
@@ -1053,11 +1206,19 @@ def resume(args: argparse.Namespace) -> int:
                 "stderr": completed.stderr[-4000:],
             }
         )
+        missing_outputs = missing_required_outputs(action)
+        if missing_outputs:
+            executed[-1]["missing_required_outputs"] = missing_outputs
         if completed.returncode not in acceptable:
             status["executed"] = executed
             status["automatic_failure"] = executed[-1]
             print(json.dumps(status, indent=2))
             return completed.returncode or 1
+        if missing_outputs:
+            status["executed"] = executed
+            status["automatic_failure"] = executed[-1]
+            print(json.dumps(status, indent=2))
+            return 1
     status = derive_status(job)
     status["executed"] = executed
     status["automatic_failure"] = "Maximum automatic steps reached."

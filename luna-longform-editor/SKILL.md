@@ -142,7 +142,9 @@ Use when the user wants Codex to replace manual recording.
    python3 scripts/xai_voiceover.py synthesize-plan --shot-plan plans/shot_plan.json --output-dir voice --shot-id shot-001 --voice-registration voice/voice_registration.json --owner-consent-confirmed
    ```
 
-   The client verifies the selected custom voice before synthesis, retries transient xAI failures, requests WAV output and timestamps, and writes request/media metadata without secrets. It measures actual WPM and may generate a corrected-speed take when the first attempt misses the approved range. A failed request cannot overwrite an existing good take. If automatic correction still misses, revise the evidence-bound voice contract instead of regenerating unchanged settings. Transcribe each generated shot, run `audit_voiceover.py`, then listen to the exact bytes. Seal a voice review only when wording, product-name pronunciation, measured cadence, identity, emotional delivery, and audio integrity all pass.
+   The client verifies the selected custom voice before synthesis, retries transient xAI failures, requests WAV output and timestamps, and writes request/media metadata without secrets. It measures actual WPM and may generate a corrected-speed take when the first attempt misses the approved range. A failed request cannot overwrite an existing good take. If automatic correction still misses, revise the evidence-bound voice contract instead of regenerating unchanged settings. Transcribe each generated shot and run `audit_voiceover.py` before any listening verdict.
+
+   For current xAI projects, the director then runs `audit_voice_delivery.py`. It first rejects deterministic clipping, click-like jumps, excessive DC offset, implausibly low level, and internal dead air. It then sends a deterministic excerpt of the exact registered owner reference followed by the exact generated shot to the pinned Grok Voice model. Grok must return strict JSON covering natural delivery, pronunciation, complete words, stutters/duplicates, artifacts, creator cadence, speaker identity, emotional delivery, confidence, issues, and concrete audible evidence. A passing verdict is sealed automatically with `seal_production_review.py voice-model`; changed audio, transcript evidence, registration, reference, model, response bytes, or signal evidence invalidates it. A concrete failure stops for a voice-performance repair instead of retrying unchanged settings. An invalid, uncertain, timed-out, or otherwise inconclusive verdict falls back to a real human listening review. A dry run can never pass. This sends the candidate and a short owner-reference excerpt to xAI and incurs normal API usage.
 
 8. For each shot:
    - Start `scripts/record_desktop.py`.
@@ -151,7 +153,7 @@ Use when the user wants Codex to replace manual recording.
    - Stop recording and inspect the actual captured frames. Accessibility success is not foreground proof; reject a take if the recorder captured Codex or another app.
    - When Computer Use can operate an app but the full-screen recorder cannot see it, use `capture_window_storyboard.py windows` to identify the exact macOS or Windows app by owner/process, title, or window ID. Capture the clean state after each consequential action, inspect the actual image pixels, then render those reviewed states to the shot's MP4 path. The state storyboard is a deliberate edited tutorial shot, not permission to omit required steps.
    - Retake if the cursor hunts, a dialog is obscured, private information appears, the promised state is absent, or the narration claim and visible result disagree.
-9. Seal recording and voice reviews with `seal_production_review.py`. Review sidecars must contain concrete notes and bind the current shot-spec hash, media hash, and evidence frames/audit. Never hand-edit a stale hash into passing state.
+9. Seal recording and voice reviews with `seal_production_review.py`. A recording review still requires inspected pixel evidence. A voice review may be a current evidence-backed Grok audio verdict or a real human fallback, but never a transcript-only or waveform-only claim. Review sidecars must contain concrete notes and bind the current shot-spec hash, media hash, and evidence frames/audit. Never hand-edit a stale hash into passing state.
 10. Run `production_director.py --execute-safe` again. It assembles only sealed shots, applies the generated focus zooms, transcribes the exact final candidate, audits that transcript against the approved script and creator profile, builds fail-closed QA templates, and pauses for adversarial frame/gap review.
 11. Complete every timeline and zoom verdict. If the adversarial pass finds a mismatch or the final creator-fidelity report rejects repeated, changed, generic, or off-pace narration, repair the responsible script/shot, allow the hashes to invalidate downstream evidence, and resume. Acceptance and cleanup happen only after the rebuilt candidate passes every gate.
 
@@ -177,6 +179,8 @@ Do not combine the planning and acceptance verdict into one pass. The same plan 
 - Write for speech, not an article. Use short clauses, contractions, direct instructions, and Luna's established vocabulary.
 - Generate narration per shot. Use xAI speech tags sparingly for pauses, breaths, emphasis, and intensity when they sound natural.
 - Transcribe synthesized output and compare it to the approved line. Mispronounced app names or changed words require regeneration.
+- Require an audible comparison against the exact registered owner reference for speaker identity. Registration provenance alone does not prove perceptual similarity.
+- Treat Grok audio uncertainty as unknown, not pass; use the human fallback when the bounded model review is inconclusive.
 - Follow the direct-feedback rules in `channel_profile.json`. Use its learned numerical measurements only when quantitative confidence is medium or high; fewer than three accepted tutorial finals is low-confidence.
 - Never use a custom voice without verified owner consent.
 
@@ -212,6 +216,7 @@ After manifest cleanup, the job retains only `delivery/final.mp4`. Never delete 
 - `seal_voice_reference_review.py`: exact-byte technical, transcript, listening, privacy, and upload-readiness gate for the owner reference.
 - `xai_voiceover.py`: consent-gated xAI custom-voice registration and per-shot narration with exact-reference provenance.
 - `audit_voiceover.py`: reject synthesized shots with missing, changed, or repeated wording before assembly.
+- `audit_voice_delivery.py`: have the pinned Grok Voice model compare an exact registered-reference excerpt with the exact candidate and emit a fail-closed listening verdict.
 - `assemble_shot_plan.py`: synchronize shot recordings with narration and reject unnatural timing.
 - `learn_channel_style.py`: learn portable pacing, language, section, loudness, scene-density, and compression measurements from accepted videos without retaining full transcripts.
 - `verify_final_video.py`: fail-closed technical, speech, creator-fidelity, plan, and visual acceptance report.
