@@ -32,6 +32,10 @@ The installer copies the skill to:
 %USERPROFILE%\.codex\skills\luna-longform-editor
 ```
 
+To continue the existing Mac development task on this PC, follow
+`WINDOWS_CONTINUATION.md`. It includes the supported chat-handoff path and a
+copy/paste prompt for a fresh Windows Codex task.
+
 ## Use
 
 After install, you can prompt Codex to edit a recording like this:

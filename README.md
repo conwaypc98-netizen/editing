@@ -78,6 +78,8 @@ Install the Luna longform editor skill from this folder, run the Windows setup s
 ```
 
 See `PROMPT_FOR_CODEX_ON_WINDOWS.md` for the fuller prompt.
+For moving the active Mac task to a Windows PC, including the supported host
+handoff flow and a fresh-task fallback, see `WINDOWS_CONTINUATION.md`.
 
 ## Included
 
@@ -85,6 +87,7 @@ See `PROMPT_FOR_CODEX_ON_WINDOWS.md` for the fuller prompt.
 - `luna-longform-editor/channel_profile.json`: persistent feedback rules plus confidence-gated learned measurements.
 - `Install-Windows.ps1`: root installer.
 - `README_WINDOWS.md`: Windows setup notes.
+- `WINDOWS_CONTINUATION.md`: cross-device handoff and exact resume prompt.
 - `PROMPT_FOR_CODEX_ON_WINDOWS.md`: copy/paste editing prompts.
 - `tests/`: regression tests for job isolation, cleanup safety, plan/media integrity, intro evidence, voice consent, exact-reference Grok listening, creator-fidelity learning, claim contracts, shot review, and final acceptance.
 

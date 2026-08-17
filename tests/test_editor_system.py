@@ -2,6 +2,7 @@ import ast
 import asyncio
 import hashlib
 import json
+import platform
 import subprocess
 import sys
 import tempfile
@@ -3658,6 +3659,7 @@ class WindowStoryboardTests(unittest.TestCase):
     def test_successful_retake_replaces_the_existing_manifest_frame(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            platform_name = platform.system()
             image = root / "state.png"
             image.write_bytes(b"old frame")
             fake_window = {
@@ -3676,10 +3678,10 @@ class WindowStoryboardTests(unittest.TestCase):
                     {
                         "schema_version": 2,
                         "capture_mode": "state_storyboard",
-                        "platform": "Darwin",
+                        "platform": platform_name,
                         "selector": {"window_id": 4242},
                         "target_window": {
-                            "platform": "Darwin",
+                            "platform": platform_name,
                             "owner": "SystemSettings",
                             "process_id": 9001,
                             "initial_window_id": 4242,
@@ -3692,7 +3694,7 @@ class WindowStoryboardTests(unittest.TestCase):
                                 "hold_seconds": 1.0,
                                 "action": "Old action",
                                 "visual_state": "Old state",
-                                "platform": "Darwin",
+                                "platform": platform_name,
                                 "window": fake_window,
                                 "signal_stats": {"non_uniform": True},
                                 "media_identity": identity,

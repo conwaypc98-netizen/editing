@@ -22,6 +22,7 @@ Included:
 - tests/test_editor_system.py
 - Install-Windows.ps1
 - README_WINDOWS.md
+- WINDOWS_CONTINUATION.md
 - PROMPT_FOR_CODEX_ON_WINDOWS.md
 
 Not included:

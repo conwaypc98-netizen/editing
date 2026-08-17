@@ -1,5 +1,11 @@
 # Copy/Paste Prompts For Codex On Windows
 
+## Continue The Existing Mac Task
+
+Follow `WINDOWS_CONTINUATION.md`. It explains how to hand off the existing chat
+to a connected Windows host, or how to resume safely from this repository in a
+fresh Windows Codex task when host handoff is unavailable.
+
 ## Edit An Existing Recording
 
 ```text
